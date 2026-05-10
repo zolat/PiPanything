@@ -29,32 +29,24 @@ and which sibling session is on what.
 
 | Track | Status | Parallel-safe? |
 |---|---|---|
-| Persistent picker | 🟢 | yes |
-| Global hotkeys | 🟢 | yes |
+| Global hotkeys | 🔵 | yes |
 | Safari extension + URL deep link | 🟢 | yes |
 | `sampleBufferRenderer` deprecation cleanup | 🟢 | yes |
 | Resize aspect-lock fidelity debug | 🟢 | yes |
 | Developer-ID signing + notarization | 🟢 | yes (logistical) |
 | DRM video workaround (research only) | 🟢 | yes |
-| Auto-hide per-window precision | ⛔ | no — wait for persistent picker |
+| Auto-hide per-window precision | ⛔ | no — wait for in-session window-identity helper |
 | Multiple simultaneous overlays | ⛔ | no — architectural; do last |
 
 ---
 
 ## Tracks
 
-### Persistent picker
-
-**Status:** 🟢 open · **Parallel-safe:** yes · **Depends on:** none.
-**Touches:** new `Features/SourcePersistence.swift`, `App/AppDelegate.swift` hooks on first frame and on stop.
-**Scope:** persist source bundleID + window-title hash to `UserDefaults`. On launch, if a saved source maps to a currently-capturable window in the picker list, kick off the capture automatically. Adds an "Auto-restore last source" toggle in the right-click menu (default **off** to avoid surprise on launch; opt-in).
-**Acceptance:** quit while a source is active, relaunch, capture resumes within 2 s if the source is still capturable; silent fallback to idle if not.
-
 ### Global hotkeys (start/stop, hide, cycle source)
 
-**Status:** 🟢 open · **Parallel-safe:** yes · **Depends on:** none.
-**Touches:** new `Features/Hotkeys.swift`. Use `Carbon.HotKey` API directly or vendor `MASShortcut` (single-file copy is fine).
-**Scope:** three defaults — `⌃⌥P` toggle capture (stop / restart last), `⌃⌥H` toggle overlay visibility, `⌃⌥N` cycle sources from the current picker list. No customization UI yet; constants in code.
+**Status:** 🔵 in progress · **Parallel-safe:** yes · **Depends on:** none.
+**Touches:** new `Features/Hotkeys.swift`, plus small additions to `App/AppDelegate.swift` and `Features/SourceVisibility.swift`. Carbon `RegisterEventHotKey` directly (no MASShortcut dependency).
+**Scope:** three defaults — `⌃⌥P` toggle capture (stop / restart last source within session), `⌃⌥H` toggle overlay visibility, `⌃⌥N` cycle sources from the current picker list. No customization UI yet; constants in code. `⌃⌥P`'s "last" is in-memory only — persistence was deliberately dropped (window content is too dynamic to make on-disk identity reliable).
 **Acceptance:** shortcuts fire even when other apps are frontmost; do not steal keys when typing in a text field elsewhere; on `applicationWillTerminate`, hotkeys are unregistered cleanly.
 
 ### Safari extension + URL deep link → WKWebView player
@@ -82,14 +74,14 @@ and which sibling session is on what.
 
 ### Auto-hide per-window precision
 
-**Status:** ⛔ blocked on **Persistent picker** (so we can stably store a window identity over time) · **Parallel-safe:** no.
+**Status:** ⛔ blocked on a per-session window-identity helper (in-memory mapping from `(bundleID, title)` → `CGWindowID` that survives a `NSWorkspace.didActivateApplicationNotification`) · **Parallel-safe:** no.
 **Touches:** `Features/SourceVisibility.swift`.
-**Scope:** narrow the auto-hide check to require *focused-window-ID match* on the source's app, not just bundleID match. Earlier B1 attempt with `AXFocusedWindow` + `_AXUIElementGetWindow` was buggy in practice; redo against a test matrix (Safari host + fullscreen video, Finder windows across Spaces, Xcode workspace + assistant editor).
+**Scope:** narrow the auto-hide check to require *focused-window-ID match* on the source's app, not just bundleID match. Earlier B1 attempt with `AXFocusedWindow` + `_AXUIElementGetWindow` was buggy in practice; redo against a test matrix (Safari host + fullscreen video, Finder windows across Spaces, Xcode workspace + assistant editor). On-disk persistence was previously contemplated but is no longer required — solve identity in-memory.
 **Acceptance:** capturing the fullscreen-video Safari window and switching to a *different* Safari window (e.g. the host tab) does NOT hide the overlay; capturing the host and switching to the host DOES hide it.
 
 ### Multiple simultaneous overlays
 
-**Status:** ⛔ blocked on **Persistent picker** + **Auto-hide per-window precision** · **Parallel-safe:** no — architectural.
+**Status:** ⛔ blocked on **Auto-hide per-window precision** · **Parallel-safe:** no — architectural.
 **Touches:** large refactor of `AppDelegate` from a single `(OverlayWindow, CaptureManager, CaptureView)` triple to a coordinator over many; menu structure becomes per-overlay submenus.
 **Scope:** support 2–3 concurrent overlays (YouTube + Slack + Slack thread). Each independently auto-hides on its source. Each gets its own crop / opacity.
 **Acceptance:** two captures running, both render, quit one source → that overlay swaps to idle while the other keeps streaming.

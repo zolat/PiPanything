@@ -69,6 +69,16 @@ final class OverlaySession {
     /// "App — Window Title" for the menu. Set during `start(window:)`.
     private(set) var sessionLabel: String = "Idle"
 
+    /// Most recent successful capture's windowID. Survives `stop()` so a
+    /// "restart last" hotkey has something to fall back to. Cleared only by
+    /// the next successful capture.
+    private(set) var lastCapturedWindowID: CGWindowID?
+
+    /// Fires after a capture's first frame lands and the 2.5s safety net
+    /// passes — i.e. when this session actually shows the source. AppDelegate
+    /// uses it to maintain an app-level "last captured anywhere" pointer.
+    var onCaptureSucceeded: ((CGWindowID) -> Void)?
+
     func menuModel() -> OverlaySessionMenuModel {
         OverlaySessionMenuModel(
             id: id,
@@ -176,6 +186,8 @@ final class OverlaySession {
                 self.swapToIdle(message: "\(appName) didn't produce frames — try another window")
                 return
             }
+            self.lastCapturedWindowID = source.windowID
+            self.onCaptureSucceeded?(source.windowID)
             if cropImmediately, self.window.contentView === self.captureView {
                 self.beginCropSelection()
             }

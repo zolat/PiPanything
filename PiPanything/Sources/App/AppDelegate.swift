@@ -7,10 +7,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private(set) var sources = SourceList()
     private var thumbnails: [CGWindowID: NSImage] = [:]
 
+    /// Most recent successful capture's windowID *across any session*. Powers
+    /// `⌃⌥P` "restart last." Survives stop / session removal — only changes
+    /// when a new capture's first frame lands.
+    private var lastCapturedWindowID: CGWindowID?
+
+    /// Latched panic-hide state for `⌃⌥H`. Toggled by the hotkey and applied
+    /// uniformly to every session so all overlays land in the same hidden /
+    /// shown state instead of swapping piecewise.
+    private var globalManuallyHidden = false
+
+    private var hotkeysController: HotkeysController!
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Launch with one always-present idle overlay — it's the entry point
         // for the right-click menu and keeps the on-screen UX of v1.
         attachContextMenuBuilder(to: coordinator.add())
+        setupHotkeys()
 
         // Request Accessibility permission so we can detect minimized windows.
         let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
@@ -23,10 +36,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        hotkeysController?.unregister()
+    }
+
+    /// Wires every per-session callback AppDelegate cares about. Called once
+    /// per session: at launch (for the entry-point overlay) and inside
+    /// `pickWindow` whenever we add a new sibling.
     private func attachContextMenuBuilder(to session: OverlaySession) {
         session.contextMenuBuilder = { [weak self, weak session] event in
             guard let self = self, let session = session else { return }
             self.showContextMenu(for: event, on: session)
+        }
+        session.onCaptureSucceeded = { [weak self] windowID in
+            self?.lastCapturedWindowID = windowID
+        }
+    }
+
+    private func setupHotkeys() {
+        hotkeysController = HotkeysController()
+        hotkeysController.onToggleCapture = { [weak self] in
+            self?.toggleCaptureViaHotkey()
+        }
+        hotkeysController.onToggleVisibility = { [weak self] in
+            self?.toggleVisibilityViaHotkey()
+        }
+        hotkeysController.onCycleSource = { [weak self] in
+            self?.cycleSourceViaHotkey()
         }
     }
 
@@ -148,13 +184,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let window = sender.representedObject as? SCWindow else { return }
         let cropImmediately = sender.tag == 1
         sender.tag = 0  // reset so subsequent picks aren't sticky
-        let target: OverlaySession
+        pickInto(targetForNewCapture(), window: window, cropImmediately: cropImmediately)
+    }
+
+    /// Resolves the session that should host a new pick: prefer a free idle
+    /// session, otherwise spawn a fresh one (cascade-positioned).
+    private func targetForNewCapture() -> OverlaySession {
         if let idle = coordinator.sessions.last(where: { !$0.isCapturing }) {
-            target = idle
-        } else {
-            target = coordinator.add()
-            attachContextMenuBuilder(to: target)
+            return idle
         }
+        let fresh = coordinator.add()
+        attachContextMenuBuilder(to: fresh)
+        return fresh
+    }
+
+    private func pickInto(_ target: OverlaySession, window: SCWindow, cropImmediately: Bool = false) {
+        // Newly-picked overlay should not stay panic-hidden if the user had
+        // toggled the global hide off-screen.
+        target.visibility.setManualHide(globalManuallyHidden)
         target.start(window: window, cropImmediately: cropImmediately)
     }
 
@@ -199,6 +246,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func quit() { NSApp.terminate(nil) }
 
+    // MARK: - Hotkey handlers
+
+    /// `⌃⌥P` — if anything is capturing anywhere, panic-stop everything (same
+    /// semantics as menu's "Stop all"). Otherwise restart the most recent
+    /// capture into the primary slot. Multi-overlay extension of v1's
+    /// "stop / restart last" toggle.
+    private func toggleCaptureViaHotkey() {
+        if coordinator.sessions.contains(where: { $0.isCapturing }) {
+            stopAll()
+            return
+        }
+        guard let id = lastCapturedWindowID,
+              let win = sources.windows.first(where: { $0.windowID == id }) else {
+            NSLog("PiPanything: ⌃⌥P pressed but no in-session source to restore")
+            return
+        }
+        pickInto(targetForNewCapture(), window: win)
+    }
+
+    /// `⌃⌥H` — panic show/hide every overlay at once. Tracks one app-level
+    /// flag and applies it to each session so partial-state UIs (one hidden,
+    /// one shown) collapse into the same state on each press.
+    private func toggleVisibilityViaHotkey() {
+        globalManuallyHidden.toggle()
+        for session in coordinator.sessions {
+            session.visibility.setManualHide(globalManuallyHidden)
+        }
+    }
+
+    /// `⌃⌥N` — cycle the primary session's source to the next pickable window.
+    /// Picks into primary specifically (not adding a new overlay) — this hotkey
+    /// is for "I want to flip the channel I'm watching", not "spawn another."
+    private func cycleSourceViaHotkey() {
+        Task {
+            await refreshSources()
+            guard !sources.windows.isEmpty else {
+                NSLog("PiPanything: ⌃⌥N pressed but no capturable windows")
+                return
+            }
+            let primary = coordinator.sessions.first ?? targetForNewCapture()
+            let next: SCWindow
+            if let current = primary.capturedWindowID,
+               let idx = sources.windows.firstIndex(where: { $0.windowID == current }) {
+                next = sources.windows[(idx + 1) % sources.windows.count]
+            } else {
+                next = sources.windows[0]
+            }
+            pickInto(primary, window: next)
+        }
+    }
+
     // MARK: - Auto-capture (env var hook for smoke tests)
 
     /// `PIP_AUTO_CAPTURE=1` picks the largest window. Set
@@ -222,14 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSLog("PiPanything: auto-capturing \(win.owningApplication?.applicationName ?? "?") — \(win.title ?? "")")
             // Route through the same pickWindow path so cascade + add-vs-fill
             // semantics are exercised exactly as the user's clicks would.
-            let target: OverlaySession
-            if let idle = coordinator.sessions.last(where: { !$0.isCapturing }) {
-                target = idle
-            } else {
-                target = coordinator.add()
-                attachContextMenuBuilder(to: target)
-            }
-            target.start(window: win)
+            pickInto(targetForNewCapture(), window: win)
             // Small gap so the first capture's first-frame resize lands before
             // the next session spawns next to it.
             try? await Task.sleep(nanoseconds: 600_000_000)

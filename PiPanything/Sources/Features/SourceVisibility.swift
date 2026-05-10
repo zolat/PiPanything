@@ -13,6 +13,11 @@ final class SourceVisibilityController {
         didSet { applyState() }
     }
 
+    /// User-pinned hide via the `⌃⌥H` global hotkey. While true, the overlay
+    /// stays hidden regardless of the auto-hide computation. Toggle off to let
+    /// the normal frontmost-app logic resume.
+    private(set) var manuallyHidden = false
+
     private(set) var sourceBundle: String?
     private(set) var sourcePID: pid_t?
 
@@ -53,8 +58,26 @@ final class SourceVisibilityController {
         applyState()
     }
 
+    func toggleManualHide() {
+        manuallyHidden.toggle()
+        applyState()
+    }
+
+    /// Same as `toggleManualHide()` but with explicit state — used by the
+    /// app-level global panic-hide hotkey so all sessions land in the same
+    /// state regardless of where each started.
+    func setManualHide(_ hidden: Bool) {
+        guard manuallyHidden != hidden else { return }
+        manuallyHidden = hidden
+        applyState()
+    }
+
     private func applyState() {
         guard let window = overlayWindow else { return }
+        if manuallyHidden {
+            window.orderOut(nil)
+            return
+        }
         guard enabled, let bundle = sourceBundle else {
             window.orderFrontRegardless()
             return
