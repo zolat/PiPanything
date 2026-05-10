@@ -10,6 +10,10 @@ final class ResizeHandle: NSView {
     var aspectRatio: CGFloat = 16.0 / 9.0
     var minSize: NSSize = NSSize(width: 240, height: 160)
     var maxSize: NSSize = NSSize(width: 1600, height: 1200)
+    /// When false, the drag resizes width/height independently — used for
+    /// tabbed overlays where each tab has its own aspect, so locking to one
+    /// would awkwardly letterbox the others.
+    var lockAspect: Bool = true
 
     private var startFrame: NSRect = .zero
     private var startMouse: NSPoint = .zero
@@ -51,25 +55,34 @@ final class ResizeHandle: NSView {
         // Dragging down (negative dy in screen coords) should grow height.
         let dy = startMouse.y - now.y
 
-        // Drive resize from whichever axis the user pushed further. Compute
-        // the candidate new width from each delta, then pick whichever
-        // implies the larger window.
-        let widthFromX = startFrame.size.width + dx
-        let heightFromY = startFrame.size.height + dy
-        let widthFromYDelta = heightFromY * aspectRatio
-        var newWidth = max(widthFromX, widthFromYDelta)
+        var newWidth: CGFloat
+        var newHeight: CGFloat
 
-        // Clamp to bounds, preserving aspect.
-        if newWidth < minSize.width { newWidth = minSize.width }
-        if newWidth > maxSize.width { newWidth = maxSize.width }
-        var newHeight = newWidth / aspectRatio
-        if newHeight < minSize.height {
-            newHeight = minSize.height
-            newWidth = newHeight * aspectRatio
-        }
-        if newHeight > maxSize.height {
-            newHeight = maxSize.height
-            newWidth = newHeight * aspectRatio
+        if lockAspect {
+            // Drive resize from whichever axis the user pushed further.
+            // Compute the candidate new width from each delta, then pick
+            // whichever implies the larger window.
+            let widthFromX = startFrame.size.width + dx
+            let heightFromY = startFrame.size.height + dy
+            let widthFromYDelta = heightFromY * aspectRatio
+            newWidth = max(widthFromX, widthFromYDelta)
+
+            // Clamp to bounds, preserving aspect.
+            if newWidth < minSize.width { newWidth = minSize.width }
+            if newWidth > maxSize.width { newWidth = maxSize.width }
+            newHeight = newWidth / aspectRatio
+            if newHeight < minSize.height {
+                newHeight = minSize.height
+                newWidth = newHeight * aspectRatio
+            }
+            if newHeight > maxSize.height {
+                newHeight = maxSize.height
+                newWidth = newHeight * aspectRatio
+            }
+        } else {
+            // Free resize: width and height move independently with the drag.
+            newWidth = max(minSize.width, min(maxSize.width, startFrame.size.width + dx))
+            newHeight = max(minSize.height, min(maxSize.height, startFrame.size.height + dy))
         }
 
         // Keep top-left fixed (the grip is bottom-right; that corner moves).

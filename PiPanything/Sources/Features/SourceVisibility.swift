@@ -78,7 +78,12 @@ final class SourceVisibilityController {
             window.orderOut(nil)
             return
         }
-        guard enabled, let bundle = sourceBundle else {
+        // Disabled controllers must sit silent, not force the window visible.
+        // In multi-tab sessions, only the active tab's controller is enabled;
+        // if disabled controllers fell through to `orderFrontRegardless`,
+        // they'd fight the active one on every NSWorkspace activation event.
+        guard enabled else { return }
+        guard let bundle = sourceBundle else {
             window.orderFrontRegardless()
             return
         }
