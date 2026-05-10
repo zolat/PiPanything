@@ -101,6 +101,15 @@ final class ResizeHandle: NSView {
             newHeight = max(minSize.height, min(maxSize.height, startFrame.size.height + dy))
         }
 
+        // Final defensive clamp. The branch logic above should already keep us
+        // ≥ min and ≤ max, but NaN aspect ratios or other edge cases could
+        // poison `max`/comparison ops (NaN compares false to everything), so
+        // bound one more time before committing the frame.
+        if !newWidth.isFinite || newWidth < minSize.width { newWidth = minSize.width }
+        if !newHeight.isFinite || newHeight < minSize.height { newHeight = minSize.height }
+        if newWidth > maxSize.width { newWidth = maxSize.width }
+        if newHeight > maxSize.height { newHeight = maxSize.height }
+
         // Keep top-left fixed (the grip is bottom-right; that corner moves).
         var newFrame = startFrame
         newFrame.origin.y = startFrame.origin.y + (startFrame.size.height - newHeight)

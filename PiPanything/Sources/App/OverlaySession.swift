@@ -174,6 +174,14 @@ final class OverlaySession {
         window.isMovableByWindowBackground = true
         window.level = .screenSaver
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        // Belt-and-suspenders min/max. The ResizeHandle clamps user drags;
+        // setting these on the window itself catches AX / scripting paths
+        // that bypass the handle and would otherwise render the overlay
+        // invisibly small or absurdly large.
+        window.minSize = Self.overlayMinSize
+        window.contentMinSize = Self.overlayMinSize
+        window.maxSize = overlayMaxSize
+        window.contentMaxSize = overlayMaxSize
 
         let containerSize = NSRect(origin: .zero, size: initialFrame.size)
         self.containerView = NSView(frame: containerSize)
@@ -399,14 +407,18 @@ final class OverlaySession {
             self?.onCaptureSucceeded?(windowID)
             self?.rebuildTabStrip()
         }
-        tab.onCropChanged = { [weak self, weak tab] _, cropAspect in
+        tab.onCropChanged = { [weak self, weak tab] rect, cropAspect in
             guard let self = self, let tab = tab else { return }
             // With ≥2 tabs, crop is per-tab — don't resize the window.
             // With 1 tab, preserve v1 behavior (resize to crop aspect).
             guard self.tabs.count == 1 else { return }
             let aspect = cropAspect ?? tab.sourceAspect
             guard let aspect = aspect else { return }
-            self.resizeOverlay(toAspect: aspect)
+            if let rect = rect {
+                self.resizeOverlay(toCrop: rect, aspect: aspect)
+            } else {
+                self.resizeOverlay(toAspect: aspect)
+            }
             tab.captureView.resizeHandle.aspectRatio = aspect
         }
     }
@@ -508,6 +520,10 @@ final class OverlaySession {
         for tab in tabs {
             tab.captureView.resizeHandle.maxSize = overlayMaxSize
         }
+        // Belt-and-suspenders: also constrain the NSWindow itself so AX /
+        // scripting paths that bypass the resize handle still honor the cap.
+        window.maxSize = overlayMaxSize
+        window.contentMaxSize = overlayMaxSize
         let current = window.frame.size
         guard current.width > d || current.height > d else { return }
         // Pull aspect from the active tab; fall back to the window's current
@@ -535,6 +551,22 @@ final class OverlaySession {
                                           min(overlayMaxSize.width, window.frame.size.width))
         let preferredHeight = preferredWidth / aspect
         let clamped = clampToOverlayBounds(NSSize(width: preferredWidth, height: preferredHeight), aspect: aspect)
+        var f = window.frame
+        f.origin.y -= (clamped.height - f.size.height)
+        f.size = clamped
+        window.setFrame(f, display: true, animate: false)
+    }
+
+    /// Resize the host window so the cropped content occupies the same on-
+    /// screen pixels as the marquee the user just drew (`rect` is normalized
+    /// [0,1] in the previous content coords). Without this, a small crop
+    /// would zoom up to fill the previous bounds. Anchors the top-left, like
+    /// the rest of the resize paths in this file.
+    private func resizeOverlay(toCrop rect: CGRect, aspect: CGFloat) {
+        let current = window.frame.size
+        let target = NSSize(width: max(rect.width, 0.0001) * current.width,
+                            height: max(rect.height, 0.0001) * current.height)
+        let clamped = clampToOverlayBounds(target, aspect: aspect)
         var f = window.frame
         f.origin.y -= (clamped.height - f.size.height)
         f.size = clamped
