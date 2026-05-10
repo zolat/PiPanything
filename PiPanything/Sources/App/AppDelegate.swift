@@ -35,12 +35,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var globalManuallyHidden = false
 
     private var hotkeysController: HotkeysController!
+    private var statusBar: StatusBarController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Launch with one always-present idle overlay — it's the entry point
         // for the right-click menu and keeps the on-screen UX of v1.
-        attachContextMenuBuilder(to: coordinator.add())
+        let entry = coordinator.add()
+        applyDefaults(to: entry)
+        attachContextMenuBuilder(to: entry)
         setupHotkeys()
+        statusBar = StatusBarController(appDelegate: self)
 
         // Request Accessibility permission so we can detect minimized windows.
         let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
@@ -214,8 +218,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return idle
         }
         let fresh = coordinator.add()
+        applyDefaults(to: fresh)
         attachContextMenuBuilder(to: fresh)
         return fresh
+    }
+
+    /// Apply user-configured starting values from `Settings` to a freshly
+    /// minted session. Existing sessions are intentionally left alone — the
+    /// status menu's "Default opacity / Auto-hide" entries are *defaults*, not
+    /// global toggles, so changing them shouldn't yank live overlays around.
+    private func applyDefaults(to session: OverlaySession) {
+        session.opacity = CGFloat(Settings.shared.defaultOpacityPercent) / 100.0
+        session.autoHide = Settings.shared.autoHideDefault
     }
 
     private func pickInto(_ target: OverlaySession, window: SCWindow, cropImmediately: Bool = false) {
@@ -325,6 +339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         source.closeTab(tabID)
         let fresh = coordinator.add()
+        applyDefaults(to: fresh)
         attachContextMenuBuilder(to: fresh)
         fresh.addTab(window: scWindow)
     }
@@ -341,6 +356,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         source.closeTab(tabID)
         target.addTab(window: scWindow)
+    }
+
+    /// Push a new max-dimension cap to every live session so a settings
+    /// change takes effect immediately — including shrinking any overlay
+    /// already larger than the new cap.
+    func applyMaxDimensionToAllSessions(_ dimension: Int) {
+        for session in coordinator.sessions {
+            session.applyMaxDimension(dimension)
+        }
     }
 
     @objc func stopAll() {

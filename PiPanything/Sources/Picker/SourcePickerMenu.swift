@@ -56,7 +56,8 @@ enum SourcePickerMenu {
         openPickerAction: Selector,
         overlayAction: Selector,
         stopAllAction: Selector,
-        quitAction: Selector
+        quitAction: Selector,
+        extraSection: ((NSMenu) -> Void)? = nil
     ) {
         menu.removeAllItems()
 
@@ -79,6 +80,13 @@ enum SourcePickerMenu {
             let stopAll = NSMenuItem(title: "Stop all", action: stopAllAction, keyEquivalent: "")
             stopAll.target = target
             menu.addItem(stopAll)
+        }
+
+        // Caller-supplied section (status menu uses this for app-wide settings).
+        // Right-click-menu callers leave it nil — no behavior change there.
+        if let extraSection = extraSection {
+            menu.addItem(.separator())
+            extraSection(menu)
         }
 
         menu.addItem(.separator())

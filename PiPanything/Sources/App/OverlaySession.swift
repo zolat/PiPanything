@@ -70,11 +70,16 @@ final class OverlaySession {
     let tabStrip: TabStripView
 
     static let overlayMinSize = NSSize(width: 240, height: 160)
-    static let overlayMaxSize = NSSize(width: 720, height: 540)
     static let overlayIdleSize = NSSize(width: 380, height: 230)
 
     /// Tabs in display order. Always at least 1 (the launch entry-point tab).
     private(set) var tabs: [OverlayTab] = []
+
+    /// Per-session cap on either window dimension. Initialized from
+    /// `Settings.maxOverlayDimension` and updated live via
+    /// `applyMaxDimension(_:)` when the user changes the setting. Held as a
+    /// square (`d × d`) so any aspect ratio caps cleanly on its longer side.
+    private(set) var overlayMaxSize: NSSize
 
     /// Stable pointer to the currently visible tab.
     private(set) var activeTabID: OverlayTabID?
@@ -155,6 +160,8 @@ final class OverlaySession {
 
     init(id: OverlayID = OverlayID(), initialFrame: NSRect) {
         self.id = id
+        let initialMax = CGFloat(Settings.shared.maxOverlayDimension)
+        self.overlayMaxSize = NSSize(width: initialMax, height: initialMax)
         self.window = OverlayWindow(
             contentRect: initialFrame,
             styleMask: [.borderless],
@@ -479,7 +486,7 @@ final class OverlaySession {
 
         tab.captureView.resizeHandle.aspectRatio = aspect
         tab.captureView.resizeHandle.minSize = Self.overlayMinSize
-        tab.captureView.resizeHandle.maxSize = Self.overlayMaxSize
+        tab.captureView.resizeHandle.maxSize = overlayMaxSize
         tab.captureView.resizeHandle.lockAspect = (tabs.count == 1)
 
         // Only swap visible content if this is the active tab — background
@@ -488,6 +495,32 @@ final class OverlaySession {
             installAsCapture(tab.captureView)
         }
         rebuildTabStrip()
+    }
+
+    /// Update the per-session size cap and apply it everywhere it matters:
+    /// every tab's resize handle (so the next drag respects it) and — if the
+    /// live frame already exceeds the new cap — the window frame itself.
+    /// Anchors the top-left during the shrink, matching the resize-handle
+    /// convention.
+    func applyMaxDimension(_ dimension: Int) {
+        let d = CGFloat(dimension)
+        overlayMaxSize = NSSize(width: d, height: d)
+        for tab in tabs {
+            tab.captureView.resizeHandle.maxSize = overlayMaxSize
+        }
+        let current = window.frame.size
+        guard current.width > d || current.height > d else { return }
+        // Pull aspect from the active tab; fall back to the window's current
+        // aspect when no tab has captured yet.
+        let aspect = activeTab?.sourceAspect ?? (current.width / max(1, current.height))
+        let clamped = clampToOverlayBounds(current, aspect: aspect)
+        var f = window.frame
+        f.origin.y -= (clamped.height - f.size.height)
+        f.size = clamped
+        window.setFrame(f, display: true, animate: false)
+        if let view = activeTab?.captureView {
+            view.frame = NSRect(origin: .zero, size: clamped)
+        }
     }
 
     /// Swap the currently-visible content to the idle view (used when active
@@ -499,7 +532,7 @@ final class OverlaySession {
 
     private func resizeOverlay(toAspect aspect: CGFloat) {
         let preferredWidth: CGFloat = max(Self.overlayMinSize.width,
-                                          min(Self.overlayMaxSize.width, window.frame.size.width))
+                                          min(overlayMaxSize.width, window.frame.size.width))
         let preferredHeight = preferredWidth / aspect
         let clamped = clampToOverlayBounds(NSSize(width: preferredWidth, height: preferredHeight), aspect: aspect)
         var f = window.frame
@@ -519,12 +552,12 @@ final class OverlaySession {
             height = Self.overlayMinSize.height
             width = height * aspect
         }
-        if width > Self.overlayMaxSize.width {
-            width = Self.overlayMaxSize.width
+        if width > overlayMaxSize.width {
+            width = overlayMaxSize.width
             height = width / aspect
         }
-        if height > Self.overlayMaxSize.height {
-            height = Self.overlayMaxSize.height
+        if height > overlayMaxSize.height {
+            height = overlayMaxSize.height
             width = height * aspect
         }
         return NSSize(width: width, height: height)

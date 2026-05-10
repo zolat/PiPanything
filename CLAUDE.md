@@ -126,6 +126,12 @@ similar pieces.
    tracking key-down/key-up bookkeeping. See
    `Features/ClickThrough.swift`.
 
+8. **`xcodebuild` is the source of truth, not SourceKit/LSP.** After
+   `xcodegen generate` the SourceKit index is stale, so the IDE and any
+   LSP-driven agent tools will surface "Cannot find type 'X' in scope"
+   diagnostics for symbols that compile fine. Trust `xcodebuild`'s
+   exit code; ignore the LSP red squigglies until the index catches up.
+
 ## Conventions
 
 - **Files are small and single-purpose.** If a file exceeds ~200 lines,

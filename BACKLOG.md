@@ -30,13 +30,13 @@ and which sibling session is on what.
 | Track | Status | Parallel-safe? |
 |---|---|---|
 | Global hotkeys | 🔵 | yes |
+| **Menu-driver helper for end-to-end verification** (high priority) | 🟢 | yes |
 | Safari extension + URL deep link | 🟢 | yes |
 | `sampleBufferRenderer` deprecation cleanup | 🟢 | yes |
 | Resize aspect-lock fidelity debug | 🟢 | yes |
 | Developer-ID signing + notarization | 🟢 | yes (logistical) |
 | DRM video workaround (research only) | 🟢 | yes |
 | Auto-hide per-window precision | ⛔ | no — wait for in-session window-identity helper |
-| Multiple simultaneous overlays | ⛔ | no — architectural; do last |
 
 ---
 
@@ -48,6 +48,15 @@ and which sibling session is on what.
 **Touches:** new `Features/Hotkeys.swift`, plus small additions to `App/AppDelegate.swift` and `Features/SourceVisibility.swift`. Carbon `RegisterEventHotKey` directly (no MASShortcut dependency).
 **Scope:** three defaults — `⌃⌥P` toggle capture (stop / restart last source within session), `⌃⌥H` toggle overlay visibility, `⌃⌥N` cycle sources from the current picker list. No customization UI yet; constants in code. `⌃⌥P`'s "last" is in-memory only — persistence was deliberately dropped (window content is too dynamic to make on-disk identity reliable).
 **Acceptance:** shortcuts fire even when other apps are frontmost; do not steal keys when typing in a text field elsewhere; on `applicationWillTerminate`, hotkeys are unregistered cleanly.
+
+### Menu-driver helper for end-to-end verification
+
+**Status:** 🟢 open · **Priority:** high · **Parallel-safe:** yes · **Depends on:** none (Accessibility grant the app already requires is sufficient).
+**Touches:** new `tools/menu-driver.sh` (or `.applescript`); a short note under "Build / run" in `CLAUDE.md` pointing future agents at it.
+**Why:** the multi-overlay track had to ship a `PIP_TEST_STOP_INDEX` env hook to verify menu dispatch because there was no way to programmatically click an item in the right-click overlay menu (or a future status-bar menu). Same gap will block live verification of auto-hide, source-quit handling, and any future menu-driven feature. Per-feature `PIP_TEST_*` knobs don't scale and bleed test paths into production code.
+**Scope:** small CLI wrapper that, given a menu-item title (or path like `Source › Stop`), uses `osascript` + `System Events` UI scripting to click that item in PiPanything's frontmost menu. No `cliclick` dependency required. Should also support opening the right-click overlay menu (synthesise a right-click at a point inside an overlay's bounds, then click an item). Add a one-paragraph CLAUDE.md note documenting the script and the convention "prefer the menu-driver over adding a new `PIP_TEST_*` env hook for menu verification".
+**Acceptance:** from a shell, `tools/menu-driver.sh "Stop"` (or equivalent) closes the running overlay end-to-end against a live build; verifiable by tailing `/tmp/pipanything.log` and seeing the same `handleOverlayMenu` log line that the synthesised env-hook produced.
+**Origin:** captured in retro `2026-05-10-224048-multi-overlay-pip-sessions.md` under "Capability gaps".
 
 ### Safari extension + URL deep link → WKWebView player
 
@@ -79,13 +88,6 @@ and which sibling session is on what.
 **Scope:** narrow the auto-hide check to require *focused-window-ID match* on the source's app, not just bundleID match. Earlier B1 attempt with `AXFocusedWindow` + `_AXUIElementGetWindow` was buggy in practice; redo against a test matrix (Safari host + fullscreen video, Finder windows across Spaces, Xcode workspace + assistant editor). On-disk persistence was previously contemplated but is no longer required — solve identity in-memory.
 **Acceptance:** capturing the fullscreen-video Safari window and switching to a *different* Safari window (e.g. the host tab) does NOT hide the overlay; capturing the host and switching to the host DOES hide it.
 
-### Multiple simultaneous overlays
-
-**Status:** ⛔ blocked on **Auto-hide per-window precision** · **Parallel-safe:** no — architectural.
-**Touches:** large refactor of `AppDelegate` from a single `(OverlayWindow, CaptureManager, CaptureView)` triple to a coordinator over many; menu structure becomes per-overlay submenus.
-**Scope:** support 2–3 concurrent overlays (YouTube + Slack + Slack thread). Each independently auto-hides on its source. Each gets its own crop / opacity.
-**Acceptance:** two captures running, both render, quit one source → that overlay swaps to idle while the other keeps streaming.
-
 ### Developer-ID signing + notarization
 
 **Status:** 🟢 open (logistical, not feature work) · **Parallel-safe:** yes · **Depends on:** user has Apple Developer Program membership and a Developer ID Application certificate.
@@ -113,3 +115,4 @@ and which sibling session is on what.
 | Manual region crop | C1 | `3ea79f7` |
 | User-controlled transparency | off-plan | `3ea79f7` |
 | ⌥-click pick-and-crop shortcut | off-plan | `3ea79f7` |
+| Multiple simultaneous overlays | D | `74b70ec` |
