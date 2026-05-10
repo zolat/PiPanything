@@ -214,7 +214,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Resolves the session that should host a new pick: prefer a free idle
     /// session, otherwise spawn a fresh one (cascade-positioned).
     private func targetForNewCapture() -> OverlaySession {
-        if let idle = coordinator.sessions.last(where: { !$0.isCapturing }) {
+        // Skip minimized sessions — those are parked deliberately; opening
+        // the picker shouldn't unintentionally fill them and lose the parked
+        // tabs. Spawn a fresh overlay instead.
+        if let idle = coordinator.sessions.last(where: { !$0.isCapturing && !$0.isMinimized }) {
             return idle
         }
         let fresh = coordinator.add()
@@ -323,6 +326,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             tearOutTab(tabID, from: session)
         case .moveTabTo(let tabID, let targetSessionID):
             moveTab(tabID, from: session, to: targetSessionID)
+        case .minimize:
+            session.minimize()
+        case .restoreFromMinimized:
+            // Refresh the source list before resolving so just-opened source
+            // windows are findable. The session's own restore call handles
+            // missing-source fallback (status message + idle view).
+            Task { [weak self, weak session] in
+                guard let self = self, let session = session else { return }
+                await self.refreshSources()
+                session.restoreFromMinimized(windows: self.sources.windows) { missing in
+                    NSLog("PiPanything: restore — source not found for \(missing)")
+                }
+            }
         }
     }
 

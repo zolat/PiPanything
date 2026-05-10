@@ -57,6 +57,17 @@ final class OverlayTab {
     var sourceApp: SCRunningApplication? { _sourceApp }
     private var _sourceApp: SCRunningApplication?
 
+    /// Bundle ID + window title of the current source. Stored separately from
+    /// `sessionLabel` (which is a display string) so minimize/restore can
+    /// re-resolve the matching `SCWindow` after refresh, without parsing the
+    /// "App — Title" label back apart.
+    private(set) var sourceBundleID: String?
+    private(set) var sourceTitle: String?
+
+    /// Active crop rect on the underlying capture (`nil` = no crop). Exposed
+    /// so the session can snapshot it during minimize.
+    var cropRect: CGRect? { captureManager.cropRect }
+
     // MARK: - Upward callbacks (set by OverlaySession at construction)
 
     /// Fires once per capture, when the first frame's size is known. Session
@@ -129,6 +140,8 @@ final class OverlayTab {
         captureView.cropRect = nil
         sourceAspect = nil
         _sourceApp = source.owningApplication
+        sourceBundleID = source.owningApplication?.bundleIdentifier
+        sourceTitle = title
 
         // Tell the visibility controller about the new source up front so a
         // didActivate notification arriving mid-start is correctly routed.
@@ -175,6 +188,8 @@ final class OverlayTab {
         captureView.cropRect = nil
         sessionLabel = "Idle"
         sourceAspect = nil
+        sourceBundleID = nil
+        sourceTitle = nil
         Task { [weak self] in
             guard let self = self else { return }
             await self.captureManager.stop()
@@ -210,6 +225,17 @@ final class OverlayTab {
         // Notify the session so it can resize the window back to source aspect
         // (single-tab behavior) or leave it alone (multi-tab — Phase 2).
         onCropChanged?(nil, sourceAspect)
+    }
+
+    /// Apply a crop programmatically (no marquee). Used by restore-from-
+    /// minimized to re-establish a saved crop after the new capture's first
+    /// frame settles `sourceAspect`. No-op if `sourceAspect` isn't known yet.
+    func applyCropProgrammatic(_ rect: CGRect) {
+        guard let aspect = sourceAspect else { return }
+        captureManager.applyCrop(rect)
+        captureView.cropRect = rect
+        let cropAspect = (rect.width / rect.height) * aspect
+        onCropChanged?(rect, cropAspect)
     }
 
     /// Called by the session after `onFirstFrame` so the tab can record the

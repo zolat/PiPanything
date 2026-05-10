@@ -27,6 +27,9 @@ struct OverlaySessionMenuModel {
     let hasCrop: Bool
     let autoHide: Bool
     let opacityPercent: Int
+    /// True when the session is parked in the status menu's "Minimized"
+    /// section. Mutually exclusive with `isCapturing` (minimized = stopped).
+    let isMinimized: Bool
     /// All capturing tabs in this session, including the active one.
     /// Single-tab sessions have `tabs.count == 1`; multi-tab sessions enable
     /// the per-tab submenus.
@@ -62,6 +65,7 @@ enum SourcePickerMenu {
         menu.removeAllItems()
 
         let capturingOverlays = activeOverlays.filter { $0.isCapturing }
+        let minimizedOverlays = activeOverlays.filter { $0.isMinimized }
 
         // ─ Active overlays ─
         if !capturingOverlays.isEmpty {
@@ -70,6 +74,17 @@ enum SourcePickerMenu {
             menu.addItem(header)
             for model in capturingOverlays {
                 menu.addItem(makeOverlayItem(model: model, target: target, action: overlayAction))
+            }
+            menu.addItem(.separator())
+        }
+
+        // ─ Minimized ─ (parked overlays; click an entry to restore it)
+        if !minimizedOverlays.isEmpty {
+            let header = NSMenuItem(title: "Minimized", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            for model in minimizedOverlays {
+                menu.addItem(makeMinimizedItem(model: model, target: target, action: overlayAction))
             }
             menu.addItem(.separator())
         }
@@ -134,6 +149,11 @@ enum SourcePickerMenu {
         autoHide.representedObject = OverlayMenuTag(model.id, .toggleAutoHide)
         autoHide.state = model.autoHide ? .on : .off
         items.append(autoHide)
+
+        let minimize = NSMenuItem(title: "Minimize", action: action, keyEquivalent: "")
+        minimize.target = target
+        minimize.representedObject = OverlayMenuTag(model.id, .minimize)
+        items.append(minimize)
 
         let opacityMenu = NSMenu()
         for percent in [100, 90, 75, 50, 25] {
@@ -229,6 +249,19 @@ enum SourcePickerMenu {
             menu.addItem(other)
         }
 
+        // Minimized overlays — same flat list as the status menu so the user
+        // can restore from any right-click, not just the menu-bar icon.
+        let minimizedOverlays = activeOverlays.filter { $0.isMinimized }
+        if !minimizedOverlays.isEmpty {
+            menu.addItem(.separator())
+            let header = NSMenuItem(title: "Minimized", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            for model in minimizedOverlays {
+                menu.addItem(makeMinimizedItem(model: model, target: target, action: overlayAction))
+            }
+        }
+
         menu.addItem(.separator())
 
         // Global picker, reachable from any overlay's right-click.
@@ -300,6 +333,18 @@ enum SourcePickerMenu {
             sub.addItem(child)
         }
         item.submenu = sub
+        return item
+    }
+
+    // MARK: - Minimized entry
+
+    /// Single-line entry for a parked overlay. Click to restore — no submenu,
+    /// since per-overlay controls (Stop, Crop, etc.) require the capture to
+    /// be live. To clear a minimized entry without restoring, use Stop all.
+    private static func makeMinimizedItem(model: OverlaySessionMenuModel, target: AnyObject, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: "◯ \(model.displayLabel)", action: action, keyEquivalent: "")
+        item.target = target
+        item.representedObject = OverlayMenuTag(model.id, .restoreFromMinimized)
         return item
     }
 

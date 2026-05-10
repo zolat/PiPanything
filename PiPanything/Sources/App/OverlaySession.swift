@@ -45,6 +45,9 @@ final class OverlayMenuTag: NSObject {
         case switchTab(OverlayTabID)
         case tearOutTab(OverlayTabID)
         case moveTabTo(OverlayTabID, OverlayID)
+        // Minimize-to-status-menu (Phase 4).
+        case minimize
+        case restoreFromMinimized
     }
     let id: OverlayID
     let action: Action
@@ -111,6 +114,37 @@ final class OverlaySession {
     /// they fit-aspect into the current frame instead.
     private var windowAspectEstablished: Bool = false
 
+    /// Frozen snapshot of an overlay's full state at minimize time. Holds the
+    /// per-tab source identity (bundle + title) used to re-resolve `SCWindow`s
+    /// on restore, plus crop, opacity, autoHide, and the window frame so the
+    /// restored overlay returns to its parked position.
+    private struct MinimizedSnapshot {
+        let windowFrame: NSRect
+        let displayLabel: String
+        let opacity: CGFloat
+        let autoHide: Bool
+        var tabs: [TabSnapshot]
+        var activeTabIndex: Int
+    }
+
+    private struct TabSnapshot {
+        let bundleID: String
+        let title: String
+        let displayLabel: String
+        let cropRect: CGRect?
+    }
+
+    private var minimizedSnapshot: MinimizedSnapshot?
+
+    /// Pending crops to re-apply on the next first-frame for each tab. Keyed
+    /// by tab ID so multi-tab restore lands each crop on its own first frame.
+    private var pendingTabCrops: [OverlayTabID: CGRect] = [:]
+
+    /// True when the session is parked in the status menu's "Minimized"
+    /// section. While minimized: window is `orderOut`, all tabs stopped, and
+    /// `minimizedSnapshot` holds the state needed to restore.
+    var isMinimized: Bool { minimizedSnapshot != nil }
+
     /// Convenience pass-throughs to the active tab — keeps existing
     /// AppDelegate/menu code working with minimal churn.
     var capturedWindowID: CGWindowID? { activeTab?.capturedWindowID }
@@ -146,14 +180,19 @@ final class OverlaySession {
                 capturedWindowID: tab.capturedWindowID
             )
         }
+        // Use the snapshot's display label when minimized — `sessionLabel`
+        // would say "Idle" since all tabs are stopped, which would read
+        // wrong in the menu's "Minimized" list.
+        let label = minimizedSnapshot?.displayLabel ?? sessionLabel
         return OverlaySessionMenuModel(
             id: id,
-            displayLabel: sessionLabel,
+            displayLabel: label,
             isCapturing: isCapturing,
             capturedWindowID: capturedWindowID,
             hasCrop: hasCrop,
             autoHide: autoHide,
             opacityPercent: opacityPercent,
+            isMinimized: isMinimized,
             tabs: tabModels
         )
     }
@@ -313,10 +352,135 @@ final class OverlaySession {
     func stop() {
         // "Stop" on a session = stop every tab (return to idle). Mirrors the
         // v1 single-capture stop behavior; with multiple tabs it's the
-        // panic-stop-this-window action.
+        // panic-stop-this-window action. Also un-minimizes — Stop-all should
+        // wipe the slate, not leave a parked entry behind.
+        if minimizedSnapshot != nil {
+            minimizedSnapshot = nil
+            pendingTabCrops.removeAll()
+            window.orderFrontRegardless()
+        }
         for tab in tabs { tab.stop() }
         showActiveContent()
         rebuildTabStrip()
+    }
+
+    // MARK: - Minimize
+
+    /// Resolve a snapshot's source against current `SCWindow`s with a
+    /// progressive matcher: exact bundle+title first; if that misses (most
+    /// common cause: app updated the window title after capture), fall back
+    /// to a unique-bundle match. Ambiguous bundle-only matches return nil
+    /// rather than guessing wrong — better to surface "source not found"
+    /// than silently restore the wrong window.
+    private func resolveWindow(for snap: TabSnapshot, in windows: [SCWindow]) -> SCWindow? {
+        if let exact = windows.first(where: { win in
+            win.owningApplication?.bundleIdentifier == snap.bundleID
+                && (win.title ?? "") == snap.title
+        }) {
+            return exact
+        }
+        let bundleMatches = windows.filter {
+            $0.owningApplication?.bundleIdentifier == snap.bundleID
+        }
+        if bundleMatches.count == 1 {
+            return bundleMatches.first
+        }
+        return nil
+    }
+
+    /// Park this overlay in the status menu: snapshot every capturing tab's
+    /// source identity + crop, stop each tab, hide the window. No-op if
+    /// nothing is capturing or already minimized.
+    func minimize() {
+        guard !isMinimized, isCapturing else { return }
+        let tabSnapshots: [TabSnapshot] = tabs.compactMap { tab in
+            guard tab.isCapturing,
+                  let bundle = tab.sourceBundleID,
+                  let title = tab.sourceTitle else { return nil }
+            return TabSnapshot(
+                bundleID: bundle,
+                title: title,
+                displayLabel: tab.sessionLabel,
+                cropRect: tab.cropRect
+            )
+        }
+        guard !tabSnapshots.isEmpty else { return }
+        let activeIdx = tabs.firstIndex(where: { $0.id == activeTabID }) ?? 0
+        minimizedSnapshot = MinimizedSnapshot(
+            windowFrame: window.frame,
+            displayLabel: sessionLabel,
+            opacity: opacity,
+            autoHide: autoHide,
+            tabs: tabSnapshots,
+            activeTabIndex: activeIdx
+        )
+        for tab in tabs { tab.stop() }
+        rebuildTabStrip()
+        window.orderOut(nil)
+    }
+
+    /// Restore from the parked state: re-show the window at its parked frame,
+    /// re-resolve each tab's `SCWindow` against `windows`, restart each tab,
+    /// and queue per-tab crops for re-application after their first frame.
+    /// `onMissing` is called once per tab whose source can't be found.
+    func restoreFromMinimized(windows: [SCWindow], onMissing: ((String) -> Void)? = nil) {
+        guard let snap = minimizedSnapshot else { return }
+        // Clear up front — partial restore should land in a non-minimized
+        // state even if some tabs can't be resolved.
+        minimizedSnapshot = nil
+        opacity = snap.opacity
+        autoHide = snap.autoHide
+        // Restore window frame BEFORE orderFront so the user doesn't see a
+        // flicker of the spawn-cascade default position.
+        window.setFrame(snap.windowFrame, display: false, animate: false)
+        window.orderFrontRegardless()
+
+        // Pair snapshots to existing tab slots by index — avoids the race in
+        // addTab's `tabs.last(where: { !$0.isCapturing })` finder, where N
+        // synchronous addTab calls would all match the same not-yet-async-
+        // capturing slot and only the last source would survive. We have
+        // pre-stopped all tabs in `minimize()`, so slots are ready to fill;
+        // create new ones only if the snapshot has more entries than slots.
+        var resolvedTabIDs: [OverlayTabID?] = []
+        for (i, tabSnap) in snap.tabs.enumerated() {
+            while tabs.count <= i {
+                let containerSize = containerView.bounds.size
+                let new = OverlayTab(overlayWindow: window,
+                                     frame: NSRect(origin: .zero, size: containerSize))
+                tabs.append(new)
+                wireTab(new)
+            }
+            let tab = tabs[i]
+            if let scWindow = resolveWindow(for: tabSnap, in: windows) {
+                startTab(tab, source: scWindow, cropImmediately: false)
+                if let crop = tabSnap.cropRect {
+                    pendingTabCrops[tab.id] = crop
+                }
+                resolvedTabIDs.append(tab.id)
+            } else {
+                resolvedTabIDs.append(nil)
+                onMissing?(tabSnap.displayLabel)
+            }
+        }
+
+        // Restore the active tab if it survived the resolution.
+        if snap.activeTabIndex < resolvedTabIDs.count,
+           let activeID = resolvedTabIDs[snap.activeTabIndex] {
+            switchTo(activeID)
+        } else if let firstID = resolvedTabIDs.compactMap({ $0 }).first {
+            // Fall back to the first successfully resolved tab when the
+            // originally-active one couldn't be found.
+            switchTo(firstID)
+        }
+
+        rebuildTabStrip()
+        updateActiveTabVisibility()
+
+        // If nothing resolved, surface a status message in the idle view.
+        if resolvedTabIDs.allSatisfy({ $0 == nil }) {
+            idleView.setStatus("Source no longer available — pick a window below")
+            showIdle()
+        }
     }
 
     func beginCropSelection() {
@@ -506,6 +670,12 @@ final class OverlaySession {
         if tab.id == activeTabID {
             installAsCapture(tab.captureView)
         }
+
+        // Apply a pending restore crop now that sourceAspect is set.
+        if let pending = pendingTabCrops.removeValue(forKey: tab.id) {
+            tab.applyCropProgrammatic(pending)
+        }
+
         rebuildTabStrip()
     }
 
