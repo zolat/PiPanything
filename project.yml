@@ -38,6 +38,7 @@ targets:
         NSPrincipalClass: NSApplication
         NSHighResolutionCapable: true
         NSScreenCaptureDescription: "PiPanything captures the window you pick to render it as a floating overlay."
+        NSHumanReadableCopyright: "Copyright © 2026 Thomas Zola. Licensed under the GNU GPL v3."
     settings:
       base:
         ENABLE_USER_SCRIPT_SANDBOXING: NO
