@@ -27,6 +27,17 @@ struct OverlaySessionMenuModel {
     let hasCrop: Bool
     let autoHide: Bool
     let opacityPercent: Int
+    /// All capturing tabs in this session, including the active one.
+    /// Single-tab sessions have `tabs.count == 1`; multi-tab sessions enable
+    /// the per-tab submenus.
+    let tabs: [OverlayTabMenuModel]
+}
+
+struct OverlayTabMenuModel {
+    let id: OverlayTabID
+    let displayLabel: String
+    let isActive: Bool
+    let capturedWindowID: CGWindowID?
 }
 
 enum SourcePickerMenu {
@@ -141,6 +152,7 @@ enum SourcePickerMenu {
         activeOverlays: [OverlaySessionMenuModel],
         target: AnyObject,
         openPickerAction: Selector,
+        addTabAction: Selector,
         overlayAction: Selector,
         stopAllAction: Selector,
         quitAction: Selector
@@ -159,7 +171,7 @@ enum SourcePickerMenu {
             return
         }
 
-        // Header showing which overlay the user clicked on.
+        // Header showing which overlay (and active tab) the user clicked on.
         let header = NSMenuItem(title: focused.displayLabel, action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
@@ -175,8 +187,29 @@ enum SourcePickerMenu {
             menu.addItem(idleHint)
         }
 
-        // Other overlays (siblings only).
+        // Add-tab to this session — opens the picker bound to focused.id.
+        menu.addItem(.separator())
+        let addTab = NSMenuItem(title: "Add tab here…", action: addTabAction, keyEquivalent: "")
+        addTab.target = target
+        addTab.representedObject = focused.id
+        menu.addItem(addTab)
+
+        // Other overlays (siblings only) — needed early so per-tab "Move to"
+        // submenus can list possible destinations.
         let siblings = activeOverlays.filter { $0.id != focusedID && $0.isCapturing }
+
+        // Per-tab submenu (only visible when there are multiple tabs).
+        if focused.tabs.count >= 2 {
+            let other = NSMenuItem(title: "Other tabs", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for tab in focused.tabs where !tab.isActive {
+                sub.addItem(makeTabItem(tab: tab, sessionID: focused.id,
+                                        moveTargets: siblings,
+                                        target: target, action: overlayAction))
+            }
+            other.submenu = sub
+            menu.addItem(other)
+        }
         if !siblings.isEmpty {
             menu.addItem(.separator())
             let other = NSMenuItem(title: "Other overlays", action: nil, keyEquivalent: "")
@@ -203,6 +236,51 @@ enum SourcePickerMenu {
         let quit = NSMenuItem(title: "Quit PiPanything", action: quitAction, keyEquivalent: "q")
         quit.target = target
         menu.addItem(quit)
+    }
+
+    // MARK: - Per-tab submenu (multi-tab overlays only)
+
+    private static func makeTabItem(tab: OverlayTabMenuModel, sessionID: OverlayID,
+                                    moveTargets: [OverlaySessionMenuModel],
+                                    target: AnyObject, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: tab.displayLabel, action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+
+        let switchTo = NSMenuItem(title: "Switch to", action: action, keyEquivalent: "")
+        switchTo.target = target
+        switchTo.representedObject = OverlayMenuTag(sessionID, .switchTab(tab.id))
+        sub.addItem(switchTo)
+
+        sub.addItem(.separator())
+
+        let tearOut = NSMenuItem(title: "Tear into new window", action: action, keyEquivalent: "")
+        tearOut.target = target
+        tearOut.representedObject = OverlayMenuTag(sessionID, .tearOutTab(tab.id))
+        sub.addItem(tearOut)
+
+        // Move to ▸ <other window> — only when other sessions exist.
+        if !moveTargets.isEmpty {
+            let move = NSMenuItem(title: "Move to", action: nil, keyEquivalent: "")
+            let moveSub = NSMenu()
+            for dest in moveTargets {
+                let destItem = NSMenuItem(title: dest.displayLabel, action: action, keyEquivalent: "")
+                destItem.target = target
+                destItem.representedObject = OverlayMenuTag(sessionID, .moveTabTo(tab.id, dest.id))
+                moveSub.addItem(destItem)
+            }
+            move.submenu = moveSub
+            sub.addItem(move)
+        }
+
+        sub.addItem(.separator())
+
+        let close = NSMenuItem(title: "Close", action: action, keyEquivalent: "")
+        close.target = target
+        close.representedObject = OverlayMenuTag(sessionID, .closeTab(tab.id))
+        sub.addItem(close)
+
+        item.submenu = sub
+        return item
     }
 
     // MARK: - Per-overlay submenu

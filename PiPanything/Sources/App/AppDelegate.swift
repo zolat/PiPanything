@@ -182,6 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 activeOverlays: activeOverlays,
                 target: self,
                 openPickerAction: #selector(openPicker),
+                addTabAction: #selector(openPickerForAddTab(_:)),
                 overlayAction: #selector(handleOverlayMenu(_:)),
                 stopAllAction: #selector(stopAll),
                 quitAction: #selector(quit)
@@ -227,14 +228,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Picker modal
 
     @objc func openPicker() {
-        let controller = pickerController ?? PickerWindowController()
-        if pickerController == nil {
-            controller.onPick = { [weak self] window, cropImmediately in
-                guard let self = self else { return }
-                self.pickInto(self.targetForNewCapture(), window: window, cropImmediately: cropImmediately)
-            }
-            pickerController = controller
+        // Default flow: pick → fill an idle session, or spawn a new one.
+        openPickerWithCallback { [weak self] window, cropImmediately in
+            guard let self = self else { return }
+            self.pickInto(self.targetForNewCapture(), window: window, cropImmediately: cropImmediately)
         }
+    }
+
+    /// Right-click → "Add tab here…": opens the picker scoped to a specific
+    /// session. The selected window joins that session as a tab via
+    /// `OverlaySession.addTab`. The session ID rides on the menu item's
+    /// `representedObject`.
+    @objc func openPickerForAddTab(_ sender: NSMenuItem) {
+        guard let sessionID = sender.representedObject as? OverlayID,
+              let session = coordinator.session(id: sessionID) else { return }
+        openPickerWithCallback { [weak session] window, cropImmediately in
+            session?.addTab(window: window, cropImmediately: cropImmediately)
+        }
+    }
+
+    /// Internal: open the picker with a per-show `onPick` callback. Avoids
+    /// the singleton-callback-set-once trap so different call sites can
+    /// route picks to different destinations (default flow vs add-tab).
+    private func openPickerWithCallback(_ callback: @escaping (SCWindow, Bool) -> Void) {
+        let controller = pickerController ?? PickerWindowController()
+        pickerController = controller
+        controller.onPick = callback   // overwrite each show
         controller.show(
             sources: sources,
             thumbnails: thumbnails,
@@ -247,7 +266,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func currentlyCapturedWindowIDs() -> Set<CGWindowID> {
-        Set(coordinator.sessions.compactMap { $0.capturedWindowID })
+        // For tabbed overlays, flatten across tabs so the picker shows the
+        // bullet on every source any tab is currently capturing.
+        var ids: Set<CGWindowID> = []
+        for session in coordinator.sessions {
+            for tab in session.tabs {
+                if let id = tab.capturedWindowID { ids.insert(id) }
+            }
+        }
+        return ids
     }
 
     // MARK: - Per-overlay action dispatch
@@ -274,7 +301,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .setOpacity(let pct):
             let clamped = max(10, min(100, pct))
             session.opacity = CGFloat(clamped) / 100.0
+        case .closeTab(let tabID):
+            session.closeTab(tabID)
+        case .switchTab(let tabID):
+            session.switchTo(tabID)
+        case .tearOutTab(let tabID):
+            tearOutTab(tabID, from: session)
+        case .moveTabTo(let tabID, let targetSessionID):
+            moveTab(tabID, from: session, to: targetSessionID)
         }
+    }
+
+    /// Pop a tab out of its session into a brand-new overlay window. Mirrors
+    /// the "Pick" flow: stop the tab in the source session, spawn a new
+    /// session via the coordinator's cascade, and start the same source on
+    /// the new session's first tab.
+    private func tearOutTab(_ tabID: OverlayTabID, from source: OverlaySession) {
+        guard let tab = source.tabs.first(where: { $0.id == tabID }),
+              let windowID = tab.capturedWindowID,
+              let scWindow = sources.windows.first(where: { $0.windowID == windowID }) else {
+            NSLog("PiPanything: tearOut — tab \(tabID) not found or its source is gone")
+            return
+        }
+        source.closeTab(tabID)
+        let fresh = coordinator.add()
+        attachContextMenuBuilder(to: fresh)
+        fresh.addTab(window: scWindow)
+    }
+
+    /// Move a tab from one session to another. Same restart pattern as
+    /// tear-out — the SCStream re-binds in the destination session.
+    private func moveTab(_ tabID: OverlayTabID, from source: OverlaySession, to targetID: OverlayID) {
+        guard let target = coordinator.session(id: targetID), target.id != source.id,
+              let tab = source.tabs.first(where: { $0.id == tabID }),
+              let windowID = tab.capturedWindowID,
+              let scWindow = sources.windows.first(where: { $0.windowID == windowID }) else {
+            NSLog("PiPanything: moveTab — invalid source/target/tab combination")
+            return
+        }
+        source.closeTab(tabID)
+        target.addTab(window: scWindow)
     }
 
     @objc func stopAll() {
@@ -320,17 +386,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// `⌃⌥N` — cycle the primary session's source to the next pickable window.
-    /// Picks into primary specifically (not adding a new overlay) — this hotkey
-    /// is for "I want to flip the channel I'm watching", not "spawn another."
+    /// `⌃⌥N` — multi-purpose cycler tied to the primary session:
+    ///   • If primary is tabbed (≥2 tabs), switch to the next tab.
+    ///   • Otherwise, cycle the active capture's source to the next pickable
+    ///     window (v1's behavior).
+    /// Picks into primary specifically (not adding a new overlay) — this
+    /// hotkey is for "flip what I'm watching," not "spawn another."
     private func cycleSourceViaHotkey() {
+        let primary = coordinator.sessions.first ?? targetForNewCapture()
+        if primary.tabs.count >= 2 {
+            // Cycle through tabs.
+            let activeIdx = primary.tabs.firstIndex(where: { $0.id == primary.activeTabID }) ?? 0
+            let next = primary.tabs[(activeIdx + 1) % primary.tabs.count]
+            primary.switchTo(next.id)
+            return
+        }
         Task {
             await refreshSources()
             guard !sources.windows.isEmpty else {
                 NSLog("PiPanything: ⌃⌥N pressed but no capturable windows")
                 return
             }
-            let primary = coordinator.sessions.first ?? targetForNewCapture()
             let next: SCWindow
             if let current = primary.capturedWindowID,
                let idx = sources.windows.firstIndex(where: { $0.windowID == current }) {
@@ -369,6 +445,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Small gap so the first capture's first-frame resize lands before
             // the next session spawns next to it.
             try? await Task.sleep(nanoseconds: 600_000_000)
+        }
+
+        if let raw = ProcessInfo.processInfo.environment["PIP_TEST_ADD_TABS"],
+           let extra = Int(raw),
+           extra > 0,
+           let primary = coordinator.sessions.first {
+            // Wait for the first auto-capture to settle, then add `extra`
+            // tabs to the primary session — same code path Phase 3's
+            // "Add tab here…" picker callback will use.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            let candidates = Array(largest.dropFirst(picks.count).prefix(extra))
+            for win in candidates {
+                NSLog("PIP_TEST_ADD_TABS: adding tab \(win.owningApplication?.applicationName ?? "?") to primary session")
+                primary.addTab(window: win)
+                try? await Task.sleep(nanoseconds: 600_000_000)
+            }
+            NSLog("PIP_TEST_ADD_TABS: primary now has \(primary.tabs.count) tabs")
+        }
+
+        // Test hook: close tab at 1-based index in primary via the menu
+        // dispatch chain (OverlayMenuTag.closeTab → handleOverlayMenu →
+        // session.closeTab) — same path the right-click menu's "Other tabs →
+        // Close" item takes.
+        if let raw = ProcessInfo.processInfo.environment["PIP_TEST_CLOSE_TAB"],
+           let idx = Int(raw),
+           let primary = coordinator.sessions.first,
+           idx >= 1, idx <= primary.tabs.count {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            let target = primary.tabs[idx - 1]
+            let preCount = primary.tabs.count
+            NSLog("PIP_TEST_CLOSE_TAB: closing tab at index \(idx) (id=\(target.id))")
+            let item = NSMenuItem(title: "Close", action: #selector(handleOverlayMenu(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = OverlayMenuTag(primary.id, .closeTab(target.id))
+            handleOverlayMenu(item)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            let postCount = primary.tabs.count
+            NSLog("PIP_TEST_CLOSE_TAB: dispatch complete. tabs \(preCount) → \(postCount). still has tab id=\(target.id)? \(primary.tabs.contains(where: { $0.id == target.id }))")
+        }
+
+        // Test hook: tear-out tab at 1-based index in primary into a new
+        // session via the menu dispatch chain.
+        if let raw = ProcessInfo.processInfo.environment["PIP_TEST_TEAR_OUT_TAB"],
+           let idx = Int(raw),
+           let primary = coordinator.sessions.first,
+           idx >= 1, idx <= primary.tabs.count {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            let target = primary.tabs[idx - 1]
+            let preSessions = coordinator.sessions.count
+            let preTabs = primary.tabs.count
+            NSLog("PIP_TEST_TEAR_OUT_TAB: tearing out tab \(idx) (id=\(target.id)) from primary")
+            let item = NSMenuItem(title: "Tear", action: #selector(handleOverlayMenu(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = OverlayMenuTag(primary.id, .tearOutTab(target.id))
+            handleOverlayMenu(item)
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            NSLog("PIP_TEST_TEAR_OUT_TAB: dispatch complete. sessions \(preSessions) → \(coordinator.sessions.count). primary tabs \(preTabs) → \(primary.tabs.count)")
+        }
+
+        // Test hook: switch to a specific tab in primary by 1-based index.
+        if let raw = ProcessInfo.processInfo.environment["PIP_TEST_SWITCH_TAB"],
+           let idx = Int(raw),
+           let primary = coordinator.sessions.first,
+           idx >= 1, idx <= primary.tabs.count {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            let target = primary.tabs[idx - 1]
+            NSLog("PIP_TEST_SWITCH_TAB: switching primary's active tab to index \(idx) (id=\(target.id))")
+            primary.switchTo(target.id)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            NSLog("PIP_TEST_SWITCH_TAB: now active=\(primary.activeTabID?.description ?? "nil") capturedWindowID=\(primary.capturedWindowID.map(String.init) ?? "nil")")
+        }
+
+        // Test hook: force the tab strip visible (skip the hover requirement)
+        // so we can screenshot it for verification.
+        if ProcessInfo.processInfo.environment["PIP_TEST_FORCE_STRIP"] == "1",
+           let primary = coordinator.sessions.first {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            primary.tabStrip.alphaValue = 1
+            primary.tabStrip.isHidden = false
+            NSLog("PIP_TEST_FORCE_STRIP: strip alpha forced to 1 (tabs=\(primary.tabs.count))")
         }
 
         if let raw = ProcessInfo.processInfo.environment["PIP_TEST_STOP_INDEX"],
