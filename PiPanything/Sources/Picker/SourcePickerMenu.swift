@@ -1,5 +1,4 @@
 import Cocoa
-import ScreenCaptureKit
 
 /// Snapshot of one overlay session as the menu sees it. The coordinator builds
 /// these once per `menuNeedsUpdate`; the menu doesn't reach back into live
@@ -20,17 +19,14 @@ enum SourcePickerMenu {
     ///   ● Safari — YouTube ▸  Stop / Crop / Auto-hide / Opacity
     ///   ● Slack — #eng     ▸  …
     ///   ─────────
-    ///   Pick window ▸  (always adds; ⌥-click adds + crops)
+    ///   Pick window…   (opens the grid modal; ⌥-click in the modal adds + crops)
     ///   Stop all
     ///   Quit
     static func populate(
         _ menu: NSMenu,
-        sources: SourceList,
-        thumbnails: [CGWindowID: NSImage],
         activeOverlays: [OverlaySessionMenuModel],
-        atSoftCap: Bool,
         target: AnyObject,
-        pickAction: Selector,
+        openPickerAction: Selector,
         overlayAction: Selector,
         stopAllAction: Selector,
         quitAction: Selector
@@ -50,10 +46,7 @@ enum SourcePickerMenu {
             menu.addItem(.separator())
         }
 
-        menu.addItem(buildPickItem(sources: sources, thumbnails: thumbnails,
-                                   capturedWindowIDs: capturedWindowIDs(in: activeOverlays),
-                                   atSoftCap: atSoftCap, activeCount: activeOverlays.count,
-                                   target: target, pickAction: pickAction))
+        menu.addItem(makePickItem(target: target, action: openPickerAction))
 
         if !capturingOverlays.isEmpty {
             let stopAll = NSMenuItem(title: "Stop all", action: stopAllAction, keyEquivalent: "")
@@ -69,61 +62,13 @@ enum SourcePickerMenu {
 
     // MARK: - Shared pieces
 
-    private static func capturedWindowIDs(in overlays: [OverlaySessionMenuModel]) -> Set<CGWindowID> {
-        Set(overlays.filter { $0.isCapturing }.compactMap { $0.capturedWindowID })
-    }
-
-    private static func buildPickItem(
-        sources: SourceList,
-        thumbnails: [CGWindowID: NSImage],
-        capturedWindowIDs: Set<CGWindowID>,
-        atSoftCap: Bool,
-        activeCount: Int,
-        target: AnyObject,
-        pickAction: Selector
-    ) -> NSMenuItem {
-        let pickMenu = NSMenu()
-        if atSoftCap {
-            let warn = NSMenuItem(
-                title: "⚠ \(activeCount) overlays active — adding more may impact performance",
-                action: nil,
-                keyEquivalent: ""
-            )
-            warn.isEnabled = false
-            pickMenu.addItem(warn)
-            pickMenu.addItem(.separator())
-        }
-        if sources.permissionDenied {
-            let item = NSMenuItem(title: "Grant Screen Recording in System Settings, then relaunch", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            pickMenu.addItem(item)
-        } else if sources.windows.isEmpty {
-            let item = NSMenuItem(title: "Loading windows…", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            pickMenu.addItem(item)
-        } else {
-            let hint = NSMenuItem(title: "Tip: hold ⌥ to pick and crop immediately", action: nil, keyEquivalent: "")
-            hint.isEnabled = false
-            pickMenu.addItem(hint)
-            pickMenu.addItem(.separator())
-            for window in sources.windows.prefix(60) {
-                let item = NSMenuItem(title: label(for: window), action: pickAction, keyEquivalent: "")
-                item.target = target
-                item.representedObject = window
-                let appName = window.owningApplication?.applicationName ?? "Unknown"
-                let title = displayTitle(for: window)
-                item.view = PickerRowView(
-                    image: thumbnails[window.windowID],
-                    title: appName,
-                    subtitle: title,
-                    isCurrent: capturedWindowIDs.contains(window.windowID)
-                )
-                pickMenu.addItem(item)
-            }
-        }
-        let pickItem = NSMenuItem(title: "Pick window", action: nil, keyEquivalent: "")
-        pickItem.submenu = pickMenu
-        return pickItem
+    /// Single "Pick window…" entry that opens the grid modal. The modal pulls
+    /// fresh sources/thumbnails from AppDelegate when shown — keeping the menu
+    /// itself dumb.
+    private static func makePickItem(target: AnyObject, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: "Pick window…", action: action, keyEquivalent: "")
+        item.target = target
+        return item
     }
 
     /// The Stop / Crop / Auto-hide / Opacity items for a single session,
@@ -177,12 +122,9 @@ enum SourcePickerMenu {
     static func populateSessionScoped(
         _ menu: NSMenu,
         focusedID: OverlayID,
-        sources: SourceList,
-        thumbnails: [CGWindowID: NSImage],
         activeOverlays: [OverlaySessionMenuModel],
-        atSoftCap: Bool,
         target: AnyObject,
-        pickAction: Selector,
+        openPickerAction: Selector,
         overlayAction: Selector,
         stopAllAction: Selector,
         quitAction: Selector
@@ -191,10 +133,12 @@ enum SourcePickerMenu {
 
         guard let focused = activeOverlays.first(where: { $0.id == focusedID }) else {
             // Session was removed mid-right-click — fall back to the global menu.
-            populate(menu, sources: sources, thumbnails: thumbnails,
-                     activeOverlays: activeOverlays, atSoftCap: atSoftCap,
-                     target: target, pickAction: pickAction,
-                     overlayAction: overlayAction, stopAllAction: stopAllAction,
+            populate(menu,
+                     activeOverlays: activeOverlays,
+                     target: target,
+                     openPickerAction: openPickerAction,
+                     overlayAction: overlayAction,
+                     stopAllAction: stopAllAction,
                      quitAction: quitAction)
             return
         }
@@ -231,10 +175,7 @@ enum SourcePickerMenu {
         menu.addItem(.separator())
 
         // Global picker, reachable from any overlay's right-click.
-        menu.addItem(buildPickItem(sources: sources, thumbnails: thumbnails,
-                                   capturedWindowIDs: capturedWindowIDs(in: activeOverlays),
-                                   atSoftCap: atSoftCap, activeCount: activeOverlays.count,
-                                   target: target, pickAction: pickAction))
+        menu.addItem(makePickItem(target: target, action: openPickerAction))
 
         if activeOverlays.contains(where: { $0.isCapturing }) {
             let stopAll = NSMenuItem(title: "Stop all", action: stopAllAction, keyEquivalent: "")
@@ -260,18 +201,4 @@ enum SourcePickerMenu {
         return item
     }
 
-    // MARK: - Labels
-
-    private static func label(for window: SCWindow) -> String {
-        let appName = window.owningApplication?.applicationName ?? "?"
-        return "\(appName) — \(displayTitle(for: window))"
-    }
-
-    private static func displayTitle(for window: SCWindow) -> String {
-        let rawTitle = window.title ?? ""
-        if rawTitle.isEmpty {
-            return "(untitled \(Int(window.frame.width))×\(Int(window.frame.height)))"
-        }
-        return rawTitle.count > 60 ? String(rawTitle.prefix(60)) + "…" : rawTitle
-    }
 }

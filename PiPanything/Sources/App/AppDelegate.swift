@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let coordinator = OverlayCoordinator()
     private(set) var sources = SourceList()
     private var thumbnails: [CGWindowID: NSImage] = [:]
+    private var pickerController: PickerWindowController?
 
     /// Most recent successful capture's windowID *across any session*. Powers
     /// `⌃⌥P` "restart last." Survives stop / session removal — only changes
@@ -32,6 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             await refreshSources()
             if ProcessInfo.processInfo.environment["PIP_AUTO_CAPTURE"] == "1" {
                 await autoCaptureLargest()
+            }
+            if ProcessInfo.processInfo.environment["PIP_OPEN_PICKER"] == "1" {
+                openPicker()
             }
         }
     }
@@ -132,6 +136,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let axNote = sources.axTrusted ? "" : " · grant Accessibility to hide minimized"
         broadcastIdleStatus("\(sources.windows.count) capturable windows · right-click for menu\(axNote)")
+
+        // If the picker modal is open, push the fresh list/thumbnails through
+        // so the grid reflows as windows appear or disappear.
+        if let picker = pickerController, picker.isVisible {
+            picker.update(
+                sources: sources,
+                thumbnails: thumbnails,
+                capturedWindowIDs: currentlyCapturedWindowIDs(),
+                isAtSoftCap: coordinator.isAtSoftCap
+            )
+        }
     }
 
     /// Update every currently-idle session's idle-view text. Capturing sessions
@@ -148,12 +163,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             SourcePickerMenu.populateSessionScoped(
                 menu,
                 focusedID: focused.id,
-                sources: sources,
-                thumbnails: thumbnails,
                 activeOverlays: activeOverlays,
-                atSoftCap: coordinator.isAtSoftCap,
                 target: self,
-                pickAction: #selector(pickWindow(_:)),
+                openPickerAction: #selector(openPicker),
                 overlayAction: #selector(handleOverlayMenu(_:)),
                 stopAllAction: #selector(stopAll),
                 quitAction: #selector(quit)
@@ -161,12 +173,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             SourcePickerMenu.populate(
                 menu,
-                sources: sources,
-                thumbnails: thumbnails,
                 activeOverlays: activeOverlays,
-                atSoftCap: coordinator.isAtSoftCap,
                 target: self,
-                pickAction: #selector(pickWindow(_:)),
+                openPickerAction: #selector(openPicker),
                 overlayAction: #selector(handleOverlayMenu(_:)),
                 stopAllAction: #selector(stopAll),
                 quitAction: #selector(quit)
@@ -180,13 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// already present, in which case the most-recently-added idle one is
     /// filled. This lets the launch experience feel single-window while every
     /// subsequent pick spawns alongside.
-    @objc func pickWindow(_ sender: NSMenuItem) {
-        guard let window = sender.representedObject as? SCWindow else { return }
-        let cropImmediately = sender.tag == 1
-        sender.tag = 0  // reset so subsequent picks aren't sticky
-        pickInto(targetForNewCapture(), window: window, cropImmediately: cropImmediately)
-    }
-
+    ///
     /// Resolves the session that should host a new pick: prefer a free idle
     /// session, otherwise spawn a fresh one (cascade-positioned).
     private func targetForNewCapture() -> OverlaySession {
@@ -203,6 +206,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // toggled the global hide off-screen.
         target.visibility.setManualHide(globalManuallyHidden)
         target.start(window: window, cropImmediately: cropImmediately)
+    }
+
+    // MARK: - Picker modal
+
+    @objc func openPicker() {
+        let controller = pickerController ?? PickerWindowController()
+        if pickerController == nil {
+            controller.onPick = { [weak self] window, cropImmediately in
+                guard let self = self else { return }
+                self.pickInto(self.targetForNewCapture(), window: window, cropImmediately: cropImmediately)
+            }
+            pickerController = controller
+        }
+        controller.show(
+            sources: sources,
+            thumbnails: thumbnails,
+            capturedWindowIDs: currentlyCapturedWindowIDs(),
+            isAtSoftCap: coordinator.isAtSoftCap
+        )
+        // Kick a fresh refresh so thumbnails update under the user as the
+        // window list moves (e.g., they switched apps just before opening).
+        Task { await refreshSources() }
+    }
+
+    private func currentlyCapturedWindowIDs() -> Set<CGWindowID> {
+        Set(coordinator.sessions.compactMap { $0.capturedWindowID })
     }
 
     // MARK: - Per-overlay action dispatch
