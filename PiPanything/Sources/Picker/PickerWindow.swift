@@ -59,7 +59,7 @@ final class PickerWindowController: NSObject, NSCollectionViewDataSource,
         panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = false
         panel.hidesOnDeactivate = false
-        panel.level = .floating
+        panel.level = .screenSaver
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.minSize = NSSize(width: 600, height: 400)
