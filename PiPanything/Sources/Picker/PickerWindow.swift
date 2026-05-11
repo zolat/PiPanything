@@ -50,7 +50,7 @@ final class PickerWindowController: NSObject, NSCollectionViewDataSource,
         let contentRect = NSRect(x: 0, y: 0, width: 1100, height: 700)
         panel = PickerPanel(
             contentRect: contentRect,
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -244,6 +244,7 @@ final class PickerWindowController: NSObject, NSCollectionViewDataSource,
         let window = displayed[indexPath.item]
         let appName = window.owningApplication?.applicationName ?? "Unknown"
         cell.configure(
+            windowID: window.windowID,
             image: thumbnails[window.windowID],
             appName: appName,
             title: PickerLabel.displayTitle(for: window),

@@ -15,98 +15,180 @@
 //  along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import Cocoa
+import QuartzCore
 
-/// Grid cell for the picker modal — thumbnail on top, app name + window title
-/// below. Hover highlights the cell; the "●" prefix marks windows already
-/// driving an overlay so the user doesn't pick the same source twice.
+/// Grid cell for the picker modal — edge-to-edge thumbnail with a gradient
+/// caption overlay at the bottom (app name + window title). On hover the
+/// caption hides and the thumbnail goes live: the hovered window is polled
+/// via the project's dlsym `legacyCaptureWindow` path so the preview reflects
+/// the current state of that window, including cross-Space sources.
 @MainActor
 final class PickerCell: NSCollectionViewItem {
     static let identifier = NSUserInterfaceItemIdentifier("PickerCell")
-    static let cellSize = NSSize(width: 240, height: 170)
+    static let cellSize = NSSize(width: 240, height: 150)
 
-    private let imageView_ = NSImageView()
+    private let thumbnailLayer = CALayer()
+    private let gradientLayer = CAGradientLayer()
     private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
-    private var trackingArea: NSTrackingArea?
-    private var isHovered = false {
-        didSet { view.needsDisplay = true }
-    }
+
+    private var windowID: CGWindowID?
+    private var snapshotContents: CGImage?
+    private var livePollTimer: Timer?
+
+    private var isHovered = false { didSet { applyHoverState() } }
 
     override func loadView() {
-        view = HoverView()
-        view.frame = NSRect(origin: .zero, size: Self.cellSize)
-        view.wantsLayer = true
+        let host = HoverView()
+        host.frame = NSRect(origin: .zero, size: Self.cellSize)
+        host.wantsLayer = true
+        view = host
+
+        guard let cardLayer = host.layer else { return }
+        cardLayer.cornerRadius = 10
+        cardLayer.masksToBounds = true
+        cardLayer.borderWidth = 0.5
+        cardLayer.borderColor = NSColor.separatorColor.cgColor
+        cardLayer.backgroundColor = NSColor.black.withAlphaComponent(0.85).cgColor
+
+        thumbnailLayer.contentsGravity = .resizeAspectFill
+        thumbnailLayer.masksToBounds = true
+        thumbnailLayer.frame = host.bounds
+        thumbnailLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        cardLayer.addSublayer(thumbnailLayer)
+
+        gradientLayer.colors = [
+            NSColor.clear.cgColor,
+            NSColor.black.withAlphaComponent(0.65).cgColor,
+            NSColor.black.withAlphaComponent(0.85).cgColor,
+        ]
+        gradientLayer.locations = [0.0, 0.55, 1.0]
+        gradientLayer.frame = NSRect(
+            x: 0, y: 0,
+            width: Self.cellSize.width,
+            height: 60
+        )
+        gradientLayer.autoresizingMask = [.layerWidthSizable, .layerMaxYMargin]
+        cardLayer.addSublayer(gradientLayer)
 
         let inset: CGFloat = 10
-        let textBlockHeight: CGFloat = 32
-        let imageRect = NSRect(
-            x: inset,
-            y: inset + textBlockHeight,
-            width: Self.cellSize.width - inset * 2,
-            height: Self.cellSize.height - inset * 2 - textBlockHeight
-        )
-
-        imageView_.imageScaling = .scaleProportionallyUpOrDown
-        imageView_.imageAlignment = .alignCenter
-        imageView_.frame = imageRect
-        imageView_.wantsLayer = true
-        imageView_.layer?.cornerRadius = 6
-        imageView_.layer?.masksToBounds = true
-        imageView_.layer?.borderWidth = 0.5
-        imageView_.layer?.borderColor = NSColor.separatorColor.cgColor
-        imageView_.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.25).cgColor
-        view.addSubview(imageView_)
 
         titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        titleLabel.textColor = .labelColor
+        titleLabel.textColor = .white
         titleLabel.frame = NSRect(x: inset, y: inset + 16, width: Self.cellSize.width - inset * 2, height: 14)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
         titleLabel.cell?.usesSingleLineMode = true
         titleLabel.drawsBackground = false; titleLabel.isBezeled = false
-        view.addSubview(titleLabel)
+        titleLabel.autoresizingMask = [.width, .maxYMargin]
+        host.addSubview(titleLabel)
 
-        subtitleLabel.textColor = .secondaryLabelColor
         subtitleLabel.font = .systemFont(ofSize: 10)
-        subtitleLabel.frame = NSRect(x: inset, y: inset + 2, width: Self.cellSize.width - inset * 2, height: 12)
+        subtitleLabel.textColor = NSColor.white.withAlphaComponent(0.75)
+        subtitleLabel.frame = NSRect(x: inset, y: inset, width: Self.cellSize.width - inset * 2, height: 12)
         subtitleLabel.lineBreakMode = .byTruncatingTail
         subtitleLabel.maximumNumberOfLines = 1
         subtitleLabel.drawsBackground = false; subtitleLabel.isBezeled = false
-        view.addSubview(subtitleLabel)
+        subtitleLabel.autoresizingMask = [.width, .maxYMargin]
+        host.addSubview(subtitleLabel)
 
-        if let host = view as? HoverView {
-            host.onHoverChange = { [weak self] hovered in
-                self?.isHovered = hovered
-            }
-            host.onDraw = { [weak self] dirty in
-                self?.drawBackground(dirty)
-            }
+        host.onHoverChange = { [weak self] hovered in
+            self?.isHovered = hovered
         }
     }
 
-    func configure(image: NSImage?, appName: String, title: String, isCurrent: Bool) {
-        imageView_.image = image
+    func configure(windowID: CGWindowID, image: NSImage?, appName: String, title: String, isCurrent: Bool) {
+        stopLivePolling()
+        self.windowID = windowID
+        let cg = image.flatMap { cgImage(from: $0) }
+        self.snapshotContents = cg
+        setLayerContents(cg)
         titleLabel.stringValue = isCurrent ? "● \(appName)" : appName
         subtitleLabel.stringValue = title
+        if isHovered {
+            startLivePolling()
+        }
     }
 
-    private func drawBackground(_ dirtyRect: NSRect) {
-        guard isHovered else { return }
-        let path = NSBezierPath(
-            roundedRect: view.bounds.insetBy(dx: 3, dy: 3),
-            xRadius: 8, yRadius: 8
-        )
-        NSColor.controlAccentColor.withAlphaComponent(0.18).setFill()
-        path.fill()
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        stopLivePolling()
+        // Reset the hover-driven hide so the next configure renders the caption.
+        if isHovered {
+            isHovered = false
+        }
+    }
+
+    // MARK: - Hover state
+
+    private func applyHoverState() {
+        guard let layer = view.layer else { return }
+        gradientLayer.isHidden = isHovered
+        titleLabel.isHidden = isHovered
+        subtitleLabel.isHidden = isHovered
+        if isHovered {
+            layer.borderWidth = 2
+            layer.borderColor = NSColor.controlAccentColor.cgColor
+            startLivePolling()
+        } else {
+            layer.borderWidth = 0.5
+            layer.borderColor = NSColor.separatorColor.cgColor
+            stopLivePolling()
+            setLayerContents(snapshotContents)
+        }
+    }
+
+    // MARK: - Live polling
+
+    private func startLivePolling() {
+        guard livePollTimer == nil, let wid = windowID else { return }
+        tickLiveFrame(for: wid)
+        let timer = Timer(timeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in
+            // Timer is scheduled on the main run loop, so the closure runs on
+            // the main thread even though its type is @Sendable. Hop into the
+            // main actor explicitly to access PickerCell state.
+            MainActor.assumeIsolated {
+                guard let self = self, let wid = self.windowID else { return }
+                self.tickLiveFrame(for: wid)
+            }
+        }
+        // Track on common modes so the timer keeps firing during scroll.
+        RunLoop.main.add(timer, forMode: .common)
+        livePollTimer = timer
+    }
+
+    private func stopLivePolling() {
+        livePollTimer?.invalidate()
+        livePollTimer = nil
+    }
+
+    private func tickLiveFrame(for wid: CGWindowID) {
+        guard let cg = legacyCaptureWindow(wid) else { return }
+        let target = CGSize(width: Self.cellSize.width * 2, height: Self.cellSize.height * 2)
+        let scaled = downsampledCGImage(cg, fittingIn: target) ?? cg
+        setLayerContents(scaled)
+    }
+
+    // MARK: - Helpers
+
+    private func setLayerContents(_ image: CGImage?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        thumbnailLayer.contents = image
+        CATransaction.commit()
+    }
+
+    private func cgImage(from image: NSImage) -> CGImage? {
+        var rect = NSRect(origin: .zero, size: image.size)
+        return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
     }
 }
 
-/// Tiny NSView that forwards hover and draw events to the owning cell. Lets
-/// PickerCell stay value-shaped without subclassing NSView in two places.
+/// Tiny NSView that forwards hover events to the owning cell. Lets PickerCell
+/// stay free of NSView subclassing while still tracking mouse enter/exit.
 @MainActor
 private final class HoverView: NSView {
     var onHoverChange: ((Bool) -> Void)?
-    var onDraw: ((NSRect) -> Void)?
     private var trackingArea: NSTrackingArea?
 
     override var isFlipped: Bool { false }
@@ -129,9 +211,4 @@ private final class HoverView: NSView {
 
     override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
     override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        onDraw?(dirtyRect)
-    }
 }
