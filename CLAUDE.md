@@ -148,6 +148,14 @@ similar pieces.
   `captureManager.cropRect`, `…isCapturing`, `…capturedSourceBundle`,
   but only the manager itself can write.
 
+## Shipping
+
+Direct push to `origin/main`. No PRs, no feature branches for the main
+checkout — work on `main`, commit logical units, push. Feature-branch
+worktrees in sibling directories (`PiPanything-tabs`, etc.) exist for
+parallel agent sessions, but they merge back to `main` rather than going
+through a PR review.
+
 ## Distribution status
 
 Currently **ad-hoc signed**. Builds and runs on the dev machine, but
