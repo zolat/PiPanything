@@ -193,6 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 target: self,
                 openPickerAction: #selector(openPicker),
                 addTabAction: #selector(openPickerForAddTab(_:)),
+                setWindowAction: #selector(openPickerForSetWindow(_:)),
                 overlayAction: #selector(handleOverlayMenu(_:)),
                 stopAllAction: #selector(stopAll),
                 quitAction: #selector(quit)
@@ -267,6 +268,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
               let session = coordinator.session(id: sessionID) else { return }
         openPickerWithCallback { [weak session] window, cropImmediately in
             session?.addTab(window: window, cropImmediately: cropImmediately)
+        }
+    }
+
+    /// Right-click → "Set window…": opens the picker scoped to a specific
+    /// session. The selected window replaces the active tab's source in
+    /// place via `OverlaySession.setActiveSource` — no new tab, no new
+    /// overlay. The session ID rides on the menu item's `representedObject`.
+    @objc func openPickerForSetWindow(_ sender: NSMenuItem) {
+        guard let sessionID = sender.representedObject as? OverlayID,
+              let session = coordinator.session(id: sessionID) else { return }
+        openPickerWithCallback { [weak session] window, cropImmediately in
+            session?.setActiveSource(window: window, cropImmediately: cropImmediately)
         }
     }
 
@@ -599,6 +612,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             primary.switchTo(target.id)
             try? await Task.sleep(nanoseconds: 300_000_000)
             NSLog("PIP_TEST_SWITCH_TAB: now active=\(primary.activeTabID?.description ?? "nil") capturedWindowID=\(primary.capturedWindowID.map(String.init) ?? "nil")")
+        }
+
+        // Test hook: replace the primary session's active source with the
+        // Nth-largest window via the same call path the right-click "Set
+        // window…" picker callback uses. Verifies the in-place swap (prior
+        // SCStream torn down, new one started, no extra tab spawned).
+        if let raw = ProcessInfo.processInfo.environment["PIP_TEST_SET_WINDOW_INDEX"],
+           let idx = Int(raw),
+           let primary = coordinator.sessions.first,
+           idx >= 1, idx <= largest.count {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            let target = largest[idx - 1]
+            let preWindowID = primary.capturedWindowID
+            let preTabCount = primary.tabs.count
+            NSLog("PIP_TEST_SET_WINDOW: swapping active source to index \(idx) (windowID=\(target.windowID) \(target.owningApplication?.applicationName ?? "?") — \(target.title ?? ""))")
+            primary.setActiveSource(window: target)
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            let postWindowID = primary.capturedWindowID
+            NSLog("PIP_TEST_SET_WINDOW: dispatch complete. capturedWindowID \(preWindowID.map(String.init) ?? "nil") → \(postWindowID.map(String.init) ?? "nil"). tabs \(preTabCount) → \(primary.tabs.count) (should be unchanged)")
         }
 
         // Test hook: force the tab strip visible (skip the hover requirement)
