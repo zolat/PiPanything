@@ -40,6 +40,12 @@ struct Cli {
 enum Command {
     /// Round-trip a ping to the running app and print {version, pid}.
     Ping,
+
+    /// List capturable windows (same filter as the right-click picker).
+    List,
+
+    /// List active overlays.
+    Overlays,
 }
 
 fn main() -> ExitCode {
@@ -70,6 +76,14 @@ fn run() -> Result<()> {
     match cli.cmd {
         Command::Ping => {
             let resp = client.call("ping", &serde_json::json!({}))?;
+            print_result(resp)?;
+        }
+        Command::List => {
+            let resp = client.call("list_windows", &protocol::ListWindowsArgs::default())?;
+            print_result(resp)?;
+        }
+        Command::Overlays => {
+            let resp = client.call("list_overlays", &serde_json::json!({}))?;
             print_result(resp)?;
         }
     }

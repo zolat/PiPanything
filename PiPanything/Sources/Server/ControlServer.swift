@@ -148,12 +148,16 @@ final class ControlServer {
         let response: ControlResponse
         do {
             let req = try ControlRequest.decode(line: line)
-            response = await MainActor.run {
+            // Dispatch on MainActor so handlers can read shared app state.
+            // Spawn a Task rather than calling MainActor.run because the
+            // handler is async (some commands await SourceList.refresh()
+            // or OverlaySession.start(window:)).
+            response = await Task { @MainActor in
                 guard let srv = server.value else {
                     return ControlResponse.failure(id: req.id, error: "server stopped")
                 }
-                return ControlHandlers.dispatch(req, delegate: srv.appDelegate)
-            }
+                return await ControlHandlers.dispatch(req, delegate: srv.appDelegate)
+            }.value
         } catch let error as ControlError {
             response = ControlResponse.failure(id: nil, error: error.message)
         } catch {
