@@ -20,6 +20,10 @@ enum ControlHandlers {
                 return try handleListOverlays(req: req, delegate: delegate)
             case "show":
                 return try await handleShow(req: req, delegate: delegate)
+            case "hide":
+                return try handleHide(req: req, delegate: delegate)
+            case "hide_all":
+                return try handleHideAll(req: req, delegate: delegate)
             default:
                 throw ControlError.unknownCommand(req.cmd)
             }
@@ -155,6 +159,58 @@ enum ControlHandlers {
             tabId: resolvedTab.id.value.uuidString
         )
         return ControlResponse.success(id: req.id, result: result)
+    }
+
+    // MARK: - hide / hide_all
+
+    private static func handleHide(req: ControlRequest, delegate: AppDelegate?) throws -> ControlResponse {
+        guard let delegate else { throw ControlError.other("app delegate unavailable") }
+        let args = try req.decodeArgs(HideArgs.self)
+        guard let uuid = UUID(uuidString: args.overlayId) else {
+            throw ControlError.parse("invalid overlay_id: \(args.overlayId)")
+        }
+        guard let session = delegate.coordinator.session(id: OverlayID(uuid)) else {
+            throw ControlError.overlayNotFound(args.overlayId)
+        }
+        let mode = args.mode ?? defaultHideMode(for: session, in: delegate.coordinator)
+        try applyHideMode(mode, to: session, in: delegate.coordinator)
+        return ControlResponse.success(id: req.id, result: EmptyResult())
+    }
+
+    private static func handleHideAll(req: ControlRequest, delegate: AppDelegate?) throws -> ControlResponse {
+        guard let delegate else { throw ControlError.other("app delegate unavailable") }
+        // Snapshot ids first: remove() mutates the sessions array.
+        let snapshot = delegate.coordinator.sessions.map { ($0, $0.id) }
+        guard let primaryID = snapshot.first?.1 else {
+            return ControlResponse.success(id: req.id, result: EmptyResult())
+        }
+        for (session, id) in snapshot {
+            if id == primaryID {
+                session.stop()
+            } else {
+                delegate.coordinator.remove(id)
+            }
+        }
+        return ControlResponse.success(id: req.id, result: EmptyResult())
+    }
+
+    private static func defaultHideMode(for session: OverlaySession, in coordinator: OverlayCoordinator) -> String {
+        // Primary always survives (stays as the idle entry-point overlay);
+        // secondaries get torn down. Mirrors the right-click "Stop" handler.
+        coordinator.sessions.first?.id == session.id ? "stop" : "remove"
+    }
+
+    private static func applyHideMode(_ mode: String, to session: OverlaySession, in coordinator: OverlayCoordinator) throws {
+        switch mode {
+        case "hide":
+            session.visibility.setManualHide(true)
+        case "stop":
+            session.stop()
+        case "remove":
+            coordinator.remove(session.id)
+        default:
+            throw ControlError.parse("invalid hide mode '\(mode)' (use 'hide', 'stop', or 'remove')")
+        }
     }
 
     private static func resolveWindow(args: ShowArgs) async throws -> SCWindow {
