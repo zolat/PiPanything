@@ -47,6 +47,37 @@ enum Command {
     /// List active overlays.
     Overlays,
 
+    /// Move and/or resize an overlay. Missing fields preserve current value.
+    /// Frames are in screen-coordinate points (bottom-left origin).
+    Geom {
+        overlay_id: String,
+        #[arg(long, allow_negative_numbers = true)]
+        x: Option<f64>,
+        #[arg(long, allow_negative_numbers = true)]
+        y: Option<f64>,
+        #[arg(long)]
+        w: Option<f64>,
+        #[arg(long)]
+        h: Option<f64>,
+    },
+
+    /// Apply or clear a crop region on the overlay's active tab (or a
+    /// specific tab via --tab). Rect coords are normalized [0,1]
+    /// bottom-left. Note: crop currently no-ops until first frame
+    /// settles the source aspect — retry until it sticks if needed.
+    Crop {
+        overlay_id: String,
+        /// "x,y,w,h" in normalized [0,1] coords. Conflicts with --clear.
+        #[arg(long, conflicts_with = "clear")]
+        rect: Option<String>,
+        /// Clear the existing crop.
+        #[arg(long, conflicts_with = "rect")]
+        clear: bool,
+        /// Target a specific tab by id. Defaults to the active tab.
+        #[arg(long)]
+        tab: Option<String>,
+    },
+
     /// Close an overlay, idle it, or toggle the manual-hide latch.
     ///
     /// Default mode for the primary overlay is "stop" (idle, keep the
@@ -132,6 +163,44 @@ fn run() -> Result<()> {
             let resp = client.call("list_overlays", &serde_json::json!({}))?;
             print_result(resp)?;
         }
+        Command::Geom {
+            overlay_id,
+            x,
+            y,
+            w,
+            h,
+        } => {
+            let args = protocol::GeomArgs {
+                overlay_id,
+                x,
+                y,
+                w,
+                h,
+            };
+            let resp = client.call("geom", &args)?;
+            print_result(resp)?;
+        }
+        Command::Crop {
+            overlay_id,
+            rect,
+            clear,
+            tab,
+        } => {
+            if rect.is_none() && !clear {
+                return Err(anyhow!("crop requires --rect 'x,y,w,h' or --clear"));
+            }
+            let parsed_rect = match rect {
+                Some(s) => Some(parse_rect(&s)?),
+                None => None,
+            };
+            let args = protocol::CropArgs {
+                overlay_id,
+                tab_id: tab,
+                rect: parsed_rect,
+            };
+            let resp = client.call("crop", &args)?;
+            print_result(resp)?;
+        }
         Command::Hide {
             overlay_id,
             all,
@@ -174,6 +243,23 @@ fn run() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn parse_rect(s: &str) -> Result<protocol::FrameRect> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 4 {
+        return Err(anyhow!("rect must be 'x,y,w,h' (got {} parts)", parts.len()));
+    }
+    let vals: Vec<f64> = parts
+        .iter()
+        .map(|p| p.trim().parse::<f64>().map_err(|e| anyhow!("{e}")))
+        .collect::<Result<_>>()?;
+    Ok(protocol::FrameRect {
+        x: vals[0],
+        y: vals[1],
+        w: vals[2],
+        h: vals[3],
+    })
 }
 
 fn print_result(resp: protocol::Response) -> Result<()> {

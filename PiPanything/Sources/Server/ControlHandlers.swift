@@ -24,6 +24,10 @@ enum ControlHandlers {
                 return try handleHide(req: req, delegate: delegate)
             case "hide_all":
                 return try handleHideAll(req: req, delegate: delegate)
+            case "geom":
+                return try handleGeom(req: req, delegate: delegate)
+            case "crop":
+                return try handleCrop(req: req, delegate: delegate)
             default:
                 throw ControlError.unknownCommand(req.cmd)
             }
@@ -211,6 +215,73 @@ enum ControlHandlers {
         default:
             throw ControlError.parse("invalid hide mode '\(mode)' (use 'hide', 'stop', or 'remove')")
         }
+    }
+
+    // MARK: - geom
+
+    private static func handleGeom(req: ControlRequest, delegate: AppDelegate?) throws -> ControlResponse {
+        guard let delegate else { throw ControlError.other("app delegate unavailable") }
+        let args = try req.decodeArgs(GeomArgs.self)
+        let session = try resolveSession(args.overlayId, in: delegate.coordinator)
+
+        let current = session.window.frame
+        let nx: CGFloat = args.x.map { CGFloat($0) } ?? current.origin.x
+        let ny: CGFloat = args.y.map { CGFloat($0) } ?? current.origin.y
+        let nw: CGFloat = args.w.map { CGFloat($0) } ?? current.size.width
+        let nh: CGFloat = args.h.map { CGFloat($0) } ?? current.size.height
+        let newFrame = NSRect(x: nx, y: ny, width: nw, height: nh)
+        session.window.setFrame(newFrame, display: true, animate: false)
+
+        let result = GeomResult(frame: FrameRect(
+            x: Double(newFrame.origin.x),
+            y: Double(newFrame.origin.y),
+            w: Double(newFrame.size.width),
+            h: Double(newFrame.size.height)
+        ))
+        return ControlResponse.success(id: req.id, result: result)
+    }
+
+    // MARK: - crop
+
+    private static func handleCrop(req: ControlRequest, delegate: AppDelegate?) throws -> ControlResponse {
+        guard let delegate else { throw ControlError.other("app delegate unavailable") }
+        let args = try req.decodeArgs(CropArgs.self)
+        let session = try resolveSession(args.overlayId, in: delegate.coordinator)
+
+        let tab: OverlayTab
+        if let tabIdString = args.tabId {
+            guard let tabUUID = UUID(uuidString: tabIdString) else {
+                throw ControlError.parse("invalid tab_id: \(tabIdString)")
+            }
+            guard let t = session.tabs.first(where: { $0.id.value == tabUUID }) else {
+                throw ControlError.tabNotFound(tabIdString)
+            }
+            tab = t
+        } else {
+            guard let active = session.activeTab else {
+                throw ControlError.other("session has no active tab")
+            }
+            tab = active
+        }
+
+        if let rect = args.rect {
+            tab.applyCropProgrammatic(CGRect(x: rect.x, y: rect.y, width: rect.w, height: rect.h))
+        } else {
+            tab.clearCrop()
+        }
+        return ControlResponse.success(id: req.id, result: EmptyResult())
+    }
+
+    // MARK: - helpers
+
+    private static func resolveSession(_ overlayIdString: String, in coordinator: OverlayCoordinator) throws -> OverlaySession {
+        guard let uuid = UUID(uuidString: overlayIdString) else {
+            throw ControlError.parse("invalid overlay_id: \(overlayIdString)")
+        }
+        guard let session = coordinator.session(id: OverlayID(uuid)) else {
+            throw ControlError.overlayNotFound(overlayIdString)
+        }
+        return session
     }
 
     private static func resolveWindow(args: ShowArgs) async throws -> SCWindow {
