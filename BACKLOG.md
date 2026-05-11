@@ -31,6 +31,8 @@ and which sibling session is on what.
 |---|---|---|
 | Global hotkeys | 🔵 | yes |
 | **Menu-driver helper for end-to-end verification** (high priority) | 🟢 | yes |
+| **Headless verification toolkit** (medium priority) | 🟢 | yes |
+| Per-PIP media-key forwarding (research) | 🟢 | yes |
 | Safari extension + URL deep link | 🟢 | yes |
 | `sampleBufferRenderer` deprecation cleanup | 🟢 | yes |
 | Resize aspect-lock fidelity debug | 🟢 | yes |
@@ -57,6 +59,27 @@ and which sibling session is on what.
 **Scope:** small CLI wrapper that, given a menu-item title (or path like `Source › Stop`), uses `osascript` + `System Events` UI scripting to click that item in PiPanything's frontmost menu. No `cliclick` dependency required. Should also support opening the right-click overlay menu (synthesise a right-click at a point inside an overlay's bounds, then click an item). Add a one-paragraph CLAUDE.md note documenting the script and the convention "prefer the menu-driver over adding a new `PIP_TEST_*` env hook for menu verification".
 **Acceptance:** from a shell, `tools/menu-driver.sh "Stop"` (or equivalent) closes the running overlay end-to-end against a live build; verifiable by tailing `/tmp/pipanything.log` and seeing the same `handleOverlayMenu` log line that the synthesised env-hook produced.
 **Origin:** captured in retro `2026-05-10-224048-multi-overlay-pip-sessions.md` under "Capability gaps".
+
+### Headless verification toolkit
+
+**Status:** 🟢 open · **Priority:** medium · **Parallel-safe:** yes · **Depends on:** none. Complements the Menu-driver track (which targets NSMenu UI scripting); this one targets internal app state, layers, and gestures.
+**Touches:** new `Features/DebugLog.swift`, additional `PIP_TEST_*` env hooks in existing feature modules, new `tools/grab-window.swift`; optionally a small `DebugDump` helper for window-state dumps.
+**Why:** five retros (`crop-resize-fix`, `overlay-resize-bounds`, `picker-above-pip-overlays`, `picker-window-polish`, `media-key-forwarder`) each hit the same wall — there's no programmatic way to verify UI/state changes in an LSUIElement screen-capture overlay from outside the process. `NSLog` is invisible to `log show` for LSUIElement; `screencapture -l <wid>` fails at the lock screen; `NSWindow` z-order isn't externally observable; the resize handle's aspect-preserving drag has no synth path; and HID-level media-key routing can't be confirmed via `cgEvent.post`. Each retro proposed a single-purpose hook — consolidating them avoids per-feature env-var sprawl and gives future sessions one place to look.
+
+**Scope (in priority order — item 1 unblocks the rest):**
+
+1. **`PIP_DEBUG_LOG=1` writes-to-file helper** (`Features/DebugLog.swift`). `appendToDebugLog(_:)` writes timestamped lines to `/tmp/pipanything.log`. Survives the LSUIElement NSLog blackhole; all subsequent test seams write through it.
+2. **`PIP_TEST_CROP=x,y,w,h` env hook.** Drives the marquee-crop pipeline programmatically against `autoCaptureLargest`. Document the one-time TCC re-grant flow for the DerivedData binary alongside it (the crop-resize-fix retro lost ~15 min to a silently-revoked grant).
+3. **`PIP_TEST_DRAG_RESIZE=w,h` env hook.** Synthesizes `mouseDown` / `mouseDragged` / `mouseUp` on the resize handle and logs the resulting frame. The only path that exercises the handle's aspect-preserving clamping (AX `set size` skips the handle).
+4. **`PIP_DUMP_WINDOWS=1` debug dump.** On launch (or hidden hotkey), logs every PiPanything `NSWindow`'s `level`, `frame`, and `orderedIndex` via `appendToDebugLog`. Turns "is X above Y?" into a one-line grep instead of a two-shot screenshot comparison.
+5. **`tools/grab-window.swift`.** Small CLI mirroring `CGCompat.legacyCaptureWindow` so headless verification has a working window-grab path even when `screencapture` is blocked (lock screen, hardware-rendered surfaces, DRM).
+6. **HID-level consumer-usage event helper** (`tools/hid-media-key.swift` or `hidutil` wrapper). Posts a real consumer-usage event at the IOKit/driver layer, indistinguishable from a physical keypress, to close the MediaKeyForwarder's last verification gap (`cgEvent.post` exercises every code path inside the forwarder but doesn't prove HID-level routing).
+
+**Convention:** all `PIP_TEST_*` hooks share a gate shape — fire only when the env var is set and `PIP_AUTO_CAPTURE=1` (or `PIP_OPEN_PICKER=1`) has produced the state to test against. Hooks live in the feature module they exercise, log their before/after via `appendToDebugLog`, and never bleed into production code paths.
+
+**Acceptance:** each retro's "could not verify X" gap collapses to a one-line shell invocation against a fresh build. Specifically: a `PIP_TEST_DRAG_RESIZE` run writes a before/after frame line to `/tmp/pipanything.log`; a `PIP_DUMP_WINDOWS` run writes a tabular `(window, level, ordered_index)` dump; `tools/grab-window.swift <wid> out.png` produces a PNG with the display locked; the HID helper posts an `F8` that the existing `MediaKeyForwarder` event tap observes as an inbound `NX_SYSDEFINED`.
+
+**Origin:** consolidated from retros `2026-05-11-{012323-pipanything-crop-resize-fix, 004606-overlay-resize-bounds, 093048-picker-above-pip-overlays, 101513-picker-window-polish, 103806-pipanything-media-key-forwarder}.md` under their respective "Capability gaps" sections. Item 1 is the unblock-everything-else; items 2–6 are independent and can land in any order.
 
 ### Safari extension + URL deep link → WKWebView player
 
@@ -94,6 +117,27 @@ and which sibling session is on what.
 **Touches:** `project.yml` signing config, new `entitlements.plist`, new `tools/notarize.sh`, `README.md` distribution section.
 **Scope:** flip ad-hoc → Developer-ID Application; turn on hardened runtime; write `tools/notarize.sh` wrapping `notarytool submit --wait` + `stapler staple`.
 **Acceptance:** copying the built `.app` to a separate Mac launches without Gatekeeper blocking.
+
+### Per-PIP media-key forwarding (research)
+
+**Status:** 🟢 open (research / blocked on a delivery primitive) · **Parallel-safe:** yes · **Depends on:** verifying a private-API path before any user-facing work.
+**Touches:** would resurrect / replace deleted `Features/MediaKeyForwarder.swift` (commit history has the abandoned attempt); AppDelegate wiring.
+**Use case (real but secondary):** Music *and* a YouTube PIP playing at the same time, hover the PIP and press ⏯ to pause *the video specifically* without surfacing Safari. With only one media source on the machine, macOS's native routing already gets the key to YouTube — the feature is purely a multi-source disambiguation.
+
+**Why v1 was abandoned:** the obvious implementation — `CGEventTap` on `NX_SYSDEFINED`, hover-detect the topmost PIP overlay under the cursor, `CGEvent.postToPid(<source app PID>)` — *technically* works (the event arrives at Safari's input queue, log line confirms it), but **does not trigger MediaSession / MPRemoteCommandCenter** in any modern browser. Modern WebKit/Chromium MediaSession is fed by Apple's private MediaRemote IPC, not by NSEvent delivery. Posting `NX_SYSDEFINED` to the PID is exactly the path BeardedSpice et al. used pre-MediaSession; it's stale.
+
+Worse: swallowing the key at our session-level tap is sufficient to block the OS's native MediaRemote routing too (verified live), so a naive forwarder is a **regression** for the single-source case — the OS would have delivered to YouTube correctly if we'd stayed out of the way.
+
+**Workaround paths considered and rejected (or deferred):**
+- *MediaRemote private framework with per-app targeting.* `MRMediaRemoteSendCommand(cmd, userInfo)` is well-known but addresses the currently-active media app, not a specific bundle ID. A per-app/per-PID targeting symbol may exist on macOS 15 / 26 (e.g. `MRMediaRemoteSendCommandToApp`-style); **verify by dumping symbols from `/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote` before committing to this path**. If it exists, this is the project-native answer (the project already uses dlsym for `CGWindowListCreateImage`, so the precedent is set).
+- *AppleScript `do JavaScript "..." in current tab of window 1`.* Per-browser (Safari / Chrome / Arc / Brave each different), requires the user to enable "Allow JavaScript from Apple Events" in each browser, and "current tab of window 1" targets the *frontmost* tab — which is exactly *not* the PIP'd tab in the headline use case. Mapping `SCWindow.windowID` to AppleScript tab is non-trivial.
+- *Activate target app, post key, restore focus.* `NSRunningApplication.activate` is observable as a window-cycling flash. Jarring on a feature whose whole point is invisibility.
+
+**Reusable infrastructure** (lives in the abandoned forwarder for reference): cursor-over-topmost-overlay walk via `NSApp.orderedWindows` + `window.frame.contains(NSEvent.mouseLocation)` (already proven in `AppDelegate.toggleClickThroughUnderCursorViaHotkey`); `CGEventTap` at `.cgSessionEventTap` with `.headInsertEventTap` + `.defaultTap` against mask `1 << 14` (NX_SYSDEFINED) installs cleanly under the existing Accessibility grant; the system disables a slow tap with `kCGEventTapDisabledByTimeout` and the callback must re-arm.
+
+**Acceptance (when revisited):** with Apple Music actively playing AND a YouTube tab in a PIP overlay actively playing, hover the YouTube PIP and press ⏯ — *only* YouTube toggles. Cursor away from the PIP — Music handles the key as today. No visible app-activation flash. No per-browser permission prompts the user has to chase down.
+
+**Origin:** explored 2026-05-11; primary evidence in the abandoned `MediaKeyForwarder.swift` commit and the user-testing transcript ("if i'm not hovered over our PIP, it does play/pause the video. however = nothing").
 
 ### DRM-protected video workaround (research only)
 

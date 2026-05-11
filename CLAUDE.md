@@ -26,7 +26,7 @@ Headline use case: keep a YouTube tab visible across Spaces.
 xcodegen generate                                       # rebuild .xcodeproj from project.yml
 xcodebuild -scheme PiPanything -configuration Debug build
 APP=$(xcodebuild -showBuildSettings -scheme PiPanything 2>/dev/null \
-  | awk '/BUILT_PRODUCTS_DIR/ {print $3}')
+  | awk -F' = ' '/^[[:space:]]+BUILT_PRODUCTS_DIR = / {print $2}')
 "$APP/PiPanything.app/Contents/MacOS/PiPanything"       # run
 ```
 
@@ -34,6 +34,8 @@ APP=$(xcodebuild -showBuildSettings -scheme PiPanything 2>/dev/null \
 
 Environment knob for headless verification:
 - `PIP_AUTO_CAPTURE=1` — auto-pick the largest non-self window at launch.
+- `PIP_OPEN_PICKER=1` — open the window picker on launch. Combine with
+  `PIP_AUTO_CAPTURE=1` for layered-window verification.
 
 Permissions on first launch (TCC will prompt; binary path inside the
 `.app` bundle is stable, so the grant survives rebuilds):
@@ -150,11 +152,20 @@ similar pieces.
 
 ## Shipping
 
-Direct push to `origin/main`. No PRs, no feature branches for the main
-checkout — work on `main`, commit logical units, push. Feature-branch
-worktrees in sibling directories (`PiPanything-tabs`, etc.) exist for
-parallel agent sessions, but they merge back to `main` rather than going
-through a PR review.
+The main checkout is shared across concurrent agent sessions. Pick the
+right surface up front:
+
+- **Features and bug fixes beyond a few lines** — run `/feature`. It
+  creates a worktree in a sibling directory (`PiPanything-<topic>`),
+  implements there, verifies, and merges back to `main` after approval.
+  Don't roll your own `git worktree add` workflow — the skill handles
+  setup and merge-back.
+- **Trivial edits** (one-line doc tweaks, CLAUDE.md updates, single-file
+  copy fixes) and **read-only work** (retros, planning, research) stay
+  on the main checkout.
+
+Direct push to `origin/main` after merge — no PRs, no review branches.
+The worktree is the isolation boundary; PR review isn't.
 
 ## Distribution status
 
