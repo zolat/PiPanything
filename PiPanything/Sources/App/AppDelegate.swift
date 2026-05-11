@@ -67,6 +67,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         controlServer?.stop()
     }
 
+    /// Add a fresh overlay session and bring it to the same configured
+    /// state as the entry-point overlay (defaults applied, context-menu
+    /// builder attached). Used by the control surface and any future
+    /// caller that needs a new overlay outside the picker flow.
+    func addConfiguredSession() -> OverlaySession {
+        let session = coordinator.add()
+        applyDefaults(to: session)
+        attachContextMenuBuilder(to: session)
+        return session
+    }
+
     private func startControlServerIfEnabled() {
         guard ProcessInfo.processInfo.environment["PIP_CONTROL_SERVER"] == "1" else { return }
         let server = ControlServer()

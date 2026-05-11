@@ -46,6 +46,34 @@ enum Command {
 
     /// List active overlays.
     Overlays,
+
+    /// Display a window as a picture-in-picture overlay.
+    ///
+    /// Routing: with --overlay, replaces that overlay's active tab
+    /// (or adds a tab with --new-tab). Without --overlay, fills the
+    /// idle entry-point overlay if there is one, else spawns a new
+    /// overlay (or always with --new-overlay).
+    Show {
+        /// Substring match against "App — Title" (case-insensitive).
+        #[arg(conflicts_with = "window_id")]
+        query: Option<String>,
+
+        /// Exact window ID from `pipanythingctl list`.
+        #[arg(long, conflicts_with = "query")]
+        window_id: Option<u32>,
+
+        /// Target an existing overlay by id.
+        #[arg(long, value_name = "OVERLAY_ID")]
+        overlay: Option<String>,
+
+        /// Always spawn a new overlay (ignored if --overlay is set).
+        #[arg(long, conflicts_with = "overlay")]
+        new_overlay: bool,
+
+        /// Add as a new tab inside the --overlay target.
+        #[arg(long, requires = "overlay")]
+        new_tab: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -84,6 +112,29 @@ fn run() -> Result<()> {
         }
         Command::Overlays => {
             let resp = client.call("list_overlays", &serde_json::json!({}))?;
+            print_result(resp)?;
+        }
+        Command::Show {
+            query,
+            window_id,
+            overlay,
+            new_overlay,
+            new_tab,
+        } => {
+            if query.is_none() && window_id.is_none() {
+                return Err(anyhow!(
+                    "show requires a query or --window-id (run `pipanythingctl list`)"
+                ));
+            }
+            let args = protocol::ShowArgs {
+                window_id,
+                query,
+                overlay_id: overlay,
+                new_overlay: new_overlay.then_some(true),
+                new_tab: new_tab.then_some(true),
+                crop: None,
+            };
+            let resp = client.call("show", &args)?;
             print_result(resp)?;
         }
     }
