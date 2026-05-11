@@ -111,6 +111,23 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         maxRoot.submenu = maxSubmenu
         menu.addItem(maxRoot)
 
+        // Click-through opacity — submenu of presets. Applies live to every
+        // currently-latched overlay (un-latched overlays are unaffected).
+        let dimRoot = NSMenuItem(title: "Click-through opacity", action: nil, keyEquivalent: "")
+        let dimSubmenu = NSMenu()
+        let currentDim = Settings.shared.clickThroughOpacity
+        for percent in [70, 50, 30, 20, 10] {
+            let item = NSMenuItem(title: "\(percent)%",
+                                  action: #selector(setClickThroughOpacity(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.tag = percent
+            item.state = (percent == currentDim) ? .on : .off
+            dimSubmenu.addItem(item)
+        }
+        dimRoot.submenu = dimSubmenu
+        menu.addItem(dimRoot)
+
         // Auto-hide default for new overlays.
         let autoHide = NSMenuItem(title: "Auto-hide new overlays",
                                    action: #selector(toggleAutoHideDefault),
@@ -143,6 +160,13 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         // Push the (possibly clamped) effective value back to live overlays so
         // existing windows shrink immediately if they exceed the new cap.
         appDelegate?.applyMaxDimensionToAllSessions(Settings.shared.maxOverlayDimension)
+    }
+
+    @objc private func setClickThroughOpacity(_ sender: NSMenuItem) {
+        Settings.shared.clickThroughOpacity = sender.tag
+        // Re-apply alpha on every session so any latched overlay shows the
+        // new factor immediately.
+        appDelegate?.applyClickThroughOpacityToAllSessions()
     }
 
     @objc private func toggleLaunchAtLogin() {

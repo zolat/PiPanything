@@ -67,7 +67,7 @@ PiPanything/
 │       │   └── PickerRowView.swift     Custom NSMenuItem.view w/ thumbnail
 │       └── Features/
 │           ├── SourceVisibility.swift  Auto show/hide on NSWorkspace activation
-│           ├── ClickThrough.swift      ⌥-hover ignoreMouseEvents + base alpha
+│           ├── ClickThrough.swift      Latched ignoreMouseEvents + configurable dim
 │           └── CropRegion.swift        Marquee selection view
 ```
 
@@ -121,10 +121,12 @@ similar pieces.
 
 7. **`NSEvent.modifierFlags` over accumulated `.flagsChanged` state.**
    The global modifier-monitor occasionally drops release events when
-   the cursor crosses app boundaries. Always read
-   `NSEvent.modifierFlags` directly inside the event handler instead of
-   tracking key-down/key-up bookkeeping. See
-   `Features/ClickThrough.swift`.
+   the cursor crosses app boundaries. If you reach for an
+   `addGlobalMonitorForEvents(.flagsChanged)` again, always read
+   `NSEvent.modifierFlags` directly inside the handler instead of
+   tracking key-down/key-up bookkeeping. (The previous use site was
+   `Features/ClickThrough.swift`'s ⌥-hover gesture, replaced by a
+   latched toggle in May 2026.)
 
 8. **`xcodebuild` is the source of truth, not SourceKit/LSP.** After
    `xcodegen generate` the SourceKit index is stale, so the IDE and any

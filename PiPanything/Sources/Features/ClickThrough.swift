@@ -16,57 +16,47 @@
 
 import Cocoa
 
-/// Toggles `overlayWindow.ignoresMouseEvents` based on whether the Option
-/// modifier is held while the cursor is over the overlay. The intent: hover
-/// over the PiP, hold ⌥, click goes through to the app underneath.
+/// Latched click-through controller. When `latched == true`, the host window
+/// becomes click-through (`ignoresMouseEvents`) and is dimmed by
+/// `Settings.shared.clickThroughOpacity`. The latch is flipped externally
+/// (`OverlaySession.clickThroughLatched`) — the controller itself is just
+/// the rendering policy.
 @MainActor
 final class ClickThroughController {
     private weak var overlayWindow: OverlayWindow?
-    private var localMonitor: Any?
-    private var globalMonitor: Any?
-    private var optionHeld = false
 
     /// User-selected base opacity (0...1). The actual `alphaValue` we set is
-    /// this multiplied by the click-through dim when ⌥ is held.
+    /// this multiplied by the click-through dim factor when the latch is on.
     var baseAlpha: CGFloat = 1.0 {
+        didSet { applyState() }
+    }
+
+    /// True when the user has latched click-through on this overlay (via the
+    /// right-click menu or a hotkey). Persists across modifier releases —
+    /// only changes when toggled again.
+    var latched: Bool = false {
         didSet { applyState() }
     }
 
     init(overlayWindow: OverlayWindow) {
         self.overlayWindow = overlayWindow
-        let mask: NSEvent.EventTypeMask = [.flagsChanged, .mouseMoved]
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-            self?.handle()
-            return event
-        }
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
-            self?.handle()
-        }
     }
 
-    deinit {
-        if let l = localMonitor { NSEvent.removeMonitor(l) }
-        if let g = globalMonitor { NSEvent.removeMonitor(g) }
-    }
-
-    private func handle() {
-        // Always read the current modifier state — never trust accumulated
-        // state from `.flagsChanged` events, which can drop release events
-        // when the cursor crosses app boundaries.
-        optionHeld = NSEvent.modifierFlags.contains(.option)
+    /// Re-evaluate and push current state to the window. Public so the
+    /// status-menu broadcast can flush a settings change (new dim factor)
+    /// across every live session without each session needing a setter call.
+    func reapply() {
         applyState()
     }
 
     private func applyState() {
         guard let window = overlayWindow else { return }
-        let cursor = NSEvent.mouseLocation
-        let overOverlay = window.isVisible && window.frame.contains(cursor)
-        let shouldIgnore = optionHeld && overOverlay
+        let shouldIgnore = latched
         if window.ignoresMouseEvents != shouldIgnore {
             window.ignoresMouseEvents = shouldIgnore
         }
-        // Combine user-set opacity with click-through dim.
-        let target = baseAlpha * (shouldIgnore ? 0.7 : 1.0)
+        let dimFactor = CGFloat(Settings.shared.clickThroughOpacity) / 100.0
+        let target = baseAlpha * (shouldIgnore ? dimFactor : 1.0)
         if abs(window.alphaValue - target) > 0.001 {
             window.alphaValue = target
         }

@@ -39,6 +39,7 @@ final class OverlayMenuTag: NSObject {
         case setCrop
         case clearCrop
         case toggleAutoHide
+        case toggleClickThrough
         case setOpacity(Int)
         // Tab-targeting actions (Phase 3).
         case closeTab(OverlayTabID)
@@ -108,6 +109,14 @@ final class OverlaySession {
     }
 
     var opacityPercent: Int { Int((opacity * 100).rounded()) }
+
+    /// Click-through latch state. When true, the window is dimmed and ignores
+    /// mouse events so the user can keep working in the app behind it.
+    /// Toggled via `⌥T` (under cursor), `⌃⌥T` (all overlays), or the
+    /// per-overlay right-click menu.
+    var clickThroughLatched: Bool = false {
+        didSet { clickThrough.latched = clickThroughLatched }
+    }
 
     /// Whether the window's aspect has been set by the first successful
     /// capture. Once true, subsequent captures don't auto-resize the window —
@@ -192,6 +201,7 @@ final class OverlaySession {
             hasCrop: hasCrop,
             autoHide: autoHide,
             opacityPercent: opacityPercent,
+            clickThroughLatched: clickThroughLatched,
             isMinimized: isMinimized,
             tabs: tabModels
         )

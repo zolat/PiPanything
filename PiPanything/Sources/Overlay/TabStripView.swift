@@ -27,8 +27,7 @@ struct TabStripModel {
 
 /// Auto-hide tab strip pinned to the top of an overlay window. Renders one
 /// pill per tab (app icon + label + close X). Hidden by default; revealed
-/// when the cursor enters the overlay window. Suppressed while ⌥ is held so
-/// it doesn't fight the click-through-on-⌥-hover gesture.
+/// when the cursor enters the overlay window.
 @MainActor
 final class TabStripView: NSView {
     static let height: CGFloat = 30
@@ -144,19 +143,11 @@ final class TabStripView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        // Suppress while ⌥ is held so click-through-on-⌥-hover isn't fighting
-        // strip-reveal-on-hover.
-        if NSEvent.modifierFlags.contains(.option) { return }
         startRevealAnimation()
     }
 
     override func mouseMoved(with event: NSEvent) {
-        if NSEvent.modifierFlags.contains(.option) {
-            // ⌥ held mid-hover — collapse the strip.
-            scheduleHide()
-        } else if alphaValue < 1 {
-            startRevealAnimation()
-        }
+        if alphaValue < 1 { startRevealAnimation() }
     }
 
     override func mouseExited(with event: NSEvent) {

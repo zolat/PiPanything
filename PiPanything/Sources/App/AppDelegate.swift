@@ -88,6 +88,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotkeysController.onCycleSource = { [weak self] in
             self?.cycleSourceViaHotkey()
         }
+        hotkeysController.onToggleClickThrough = { [weak self] in
+            self?.toggleClickThroughViaHotkey()
+        }
+        hotkeysController.onToggleClickThroughUnderCursor = { [weak self] in
+            self?.toggleClickThroughUnderCursorViaHotkey()
+        }
     }
 
     private static let sessionMenuIDPrefix = "pip.session."
@@ -315,6 +321,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             session.clearCrop()
         case .toggleAutoHide:
             session.autoHide.toggle()
+        case .toggleClickThrough:
+            session.clickThroughLatched.toggle()
         case .setOpacity(let pct):
             let clamped = max(10, min(100, pct))
             session.opacity = CGFloat(clamped) / 100.0
@@ -383,6 +391,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// Push the new click-through opacity to every live session so any
+    /// currently-latched overlay re-applies its alpha at the new factor.
+    /// Idempotent for un-latched sessions (alpha = baseAlpha * 1.0 either
+    /// way), so no need to filter.
+    func applyClickThroughOpacityToAllSessions() {
+        for session in coordinator.sessions {
+            session.clickThrough.reapply()
+        }
+    }
+
     @objc func stopAll() {
         // Stop everything; remove sibling sessions, leave the entry-point one
         // standing so the user can still right-click it.
@@ -424,6 +442,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for session in coordinator.sessions {
             session.visibility.setManualHide(globalManuallyHidden)
         }
+    }
+
+    /// `⌃⌥T` — flip every overlay's click-through latch to a uniform state.
+    /// If any are on, turn them all off; otherwise turn them all on. Same
+    /// "any on → all off" shape as `toggleCaptureViaHotkey`.
+    private func toggleClickThroughViaHotkey() {
+        let anyOn = coordinator.sessions.contains(where: { $0.clickThroughLatched })
+        let target = !anyOn
+        for session in coordinator.sessions {
+            session.clickThroughLatched = target
+        }
+    }
+
+    /// `⌥T` — toggle the latch on the topmost overlay under the cursor.
+    /// Walks `NSApp.orderedWindows` front-to-back so overlapping overlays
+    /// resolve cleanly. No-op if the cursor isn't over one of our overlays.
+    private func toggleClickThroughUnderCursorViaHotkey() {
+        let mouse = NSEvent.mouseLocation
+        for window in NSApp.orderedWindows {
+            guard window.isVisible, window.frame.contains(mouse) else { continue }
+            if let session = coordinator.sessions.first(where: { $0.window === window }) {
+                session.clickThroughLatched.toggle()
+                return
+            }
+        }
+        NSLog("PiPanything: ⌥T pressed but cursor isn't over any overlay")
     }
 
     /// `⌃⌥N` — multi-purpose cycler tied to the primary session:

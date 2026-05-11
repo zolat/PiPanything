@@ -30,6 +30,8 @@ final class HotkeysController {
     var onToggleCapture: (() -> Void)?
     var onToggleVisibility: (() -> Void)?
     var onCycleSource: (() -> Void)?
+    var onToggleClickThrough: (() -> Void)?
+    var onToggleClickThroughUnderCursor: (() -> Void)?
 
     private var eventHandler: EventHandlerRef?
     private var hotKeyRefs: [EventHotKeyRef] = []
@@ -42,6 +44,8 @@ final class HotkeysController {
         case toggleCapture = 1
         case toggleVisibility = 2
         case cycleSource = 3
+        case toggleClickThrough = 4
+        case toggleClickThroughUnderCursor = 5
     }
 
     init() {
@@ -54,6 +58,17 @@ final class HotkeysController {
         }
         registerHotKey(.cycleSource, keyCode: UInt32(kVK_ANSI_N)) { [weak self] in
             self?.onCycleSource?()
+        }
+        registerHotKey(.toggleClickThrough, keyCode: UInt32(kVK_ANSI_T)) { [weak self] in
+            self?.onToggleClickThrough?()
+        }
+        // Single-modifier ⌥T — distinct from the ⌃⌥-prefixed family. Will
+        // shadow the OS's default ⌥T (types `†` on US layouts) globally;
+        // this is a deliberate user-chosen binding.
+        registerHotKey(.toggleClickThroughUnderCursor,
+                       keyCode: UInt32(kVK_ANSI_T),
+                       modifiers: UInt32(optionKey)) { [weak self] in
+            self?.onToggleClickThroughUnderCursor?()
         }
     }
 
@@ -110,11 +125,13 @@ final class HotkeysController {
         actions[id]?()
     }
 
-    private func registerHotKey(_ id: HotKeyID, keyCode: UInt32, action: @escaping () -> Void) {
-        let mods: UInt32 = UInt32(controlKey | optionKey)
+    private func registerHotKey(_ id: HotKeyID,
+                                keyCode: UInt32,
+                                modifiers: UInt32 = UInt32(controlKey | optionKey),
+                                action: @escaping () -> Void) {
         let hotKeyID = EventHotKeyID(signature: Self.signature, id: id.rawValue)
         var ref: EventHotKeyRef?
-        let status = RegisterEventHotKey(keyCode, mods, hotKeyID, GetApplicationEventTarget(), 0, &ref)
+        let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetApplicationEventTarget(), 0, &ref)
         guard status == noErr, let ref else {
             NSLog("PiPanything: RegisterEventHotKey failed for id=\(id.rawValue) keyCode=\(keyCode) status=\(status) — combo may already be in use")
             return

@@ -29,12 +29,21 @@ final class Settings {
     private let opacityKey = "pip.defaultOpacityPercent"
     private let autoHideKey = "pip.autoHideDefault"
     private let maxDimensionKey = "pip.maxOverlayDimension"
+    private let clickThroughOpacityKey = "pip.clickThroughOpacity"
 
     /// Allowed range for the user-configurable overlay size cap. Floor sits
     /// well above the resize-handle minimum so the cap is always usable; ceiling
     /// covers a 4K display's longer side.
     static let maxDimensionBounds: ClosedRange<Int> = 480...3840
     static let defaultMaxDimension: Int = 1280
+
+    /// Allowed range for the click-through dim factor (percent). 100 = same
+    /// as `baseAlpha`; 10 = barely visible, "leave it on while you work
+    /// behind it." Floor stays at 10 so the latched overlay never disappears
+    /// far enough to get lost. Default preserves the old hold-⌥ feel on
+    /// first toggle.
+    static let clickThroughOpacityBounds: ClosedRange<Int> = 10...100
+    static let defaultClickThroughOpacity: Int = 70
 
     private init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -73,6 +82,22 @@ final class Settings {
             let clamped = min(Self.maxDimensionBounds.upperBound,
                               max(Self.maxDimensionBounds.lowerBound, newValue))
             defaults.set(clamped, forKey: maxDimensionKey)
+        }
+    }
+
+    /// Dim factor (percent) applied to a session's `alphaValue` when its
+    /// click-through latch is on. Multiplied with the per-overlay base opacity
+    /// — so "70" means 70% of whatever the user's per-overlay opacity is.
+    var clickThroughOpacity: Int {
+        get {
+            let raw = defaults.object(forKey: clickThroughOpacityKey) as? Int ?? Self.defaultClickThroughOpacity
+            return min(Self.clickThroughOpacityBounds.upperBound,
+                       max(Self.clickThroughOpacityBounds.lowerBound, raw))
+        }
+        set {
+            let clamped = min(Self.clickThroughOpacityBounds.upperBound,
+                              max(Self.clickThroughOpacityBounds.lowerBound, newValue))
+            defaults.set(clamped, forKey: clickThroughOpacityKey)
         }
     }
 

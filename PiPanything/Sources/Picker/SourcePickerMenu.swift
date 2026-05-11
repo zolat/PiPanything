@@ -27,6 +27,9 @@ struct OverlaySessionMenuModel {
     let hasCrop: Bool
     let autoHide: Bool
     let opacityPercent: Int
+    /// True when the click-through latch is engaged for this session — the
+    /// window is dimmed and accepts no mouse input.
+    let clickThroughLatched: Bool
     /// True when the session is parked in the status menu's "Minimized"
     /// section. Mutually exclusive with `isCapturing` (minimized = stopped).
     let isMinimized: Bool
@@ -149,6 +152,12 @@ enum SourcePickerMenu {
         autoHide.representedObject = OverlayMenuTag(model.id, .toggleAutoHide)
         autoHide.state = model.autoHide ? .on : .off
         items.append(autoHide)
+
+        let clickThrough = NSMenuItem(title: "Click-through", action: action, keyEquivalent: "")
+        clickThrough.target = target
+        clickThrough.representedObject = OverlayMenuTag(model.id, .toggleClickThrough)
+        clickThrough.state = model.clickThroughLatched ? .on : .off
+        items.append(clickThrough)
 
         let minimize = NSMenuItem(title: "Minimize", action: action, keyEquivalent: "")
         minimize.target = target
