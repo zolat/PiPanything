@@ -28,6 +28,12 @@ enum ControlHandlers {
                 return try handleGeom(req: req, delegate: delegate)
             case "crop":
                 return try handleCrop(req: req, delegate: delegate)
+            case "opacity":
+                return try handleOpacity(req: req, delegate: delegate)
+            case "click_through":
+                return try handleClickThrough(req: req, delegate: delegate)
+            case "auto_hide":
+                return try handleAutoHide(req: req, delegate: delegate)
             default:
                 throw ControlError.unknownCommand(req.cmd)
             }
@@ -269,6 +275,33 @@ enum ControlHandlers {
         } else {
             tab.clearCrop()
         }
+        return ControlResponse.success(id: req.id, result: EmptyResult())
+    }
+
+    // MARK: - opacity / click_through / auto_hide
+
+    private static func handleOpacity(req: ControlRequest, delegate: AppDelegate?) throws -> ControlResponse {
+        guard let delegate else { throw ControlError.other("app delegate unavailable") }
+        let args = try req.decodeArgs(OpacityArgs.self)
+        let session = try resolveSession(args.overlayId, in: delegate.coordinator)
+        let clamped = max(0.0, min(1.0, args.alpha))
+        session.opacity = CGFloat(clamped)
+        return ControlResponse.success(id: req.id, result: EmptyResult())
+    }
+
+    private static func handleClickThrough(req: ControlRequest, delegate: AppDelegate?) throws -> ControlResponse {
+        guard let delegate else { throw ControlError.other("app delegate unavailable") }
+        let args = try req.decodeArgs(ClickThroughArgs.self)
+        let session = try resolveSession(args.overlayId, in: delegate.coordinator)
+        session.clickThroughLatched = args.enabled
+        return ControlResponse.success(id: req.id, result: EmptyResult())
+    }
+
+    private static func handleAutoHide(req: ControlRequest, delegate: AppDelegate?) throws -> ControlResponse {
+        guard let delegate else { throw ControlError.other("app delegate unavailable") }
+        let args = try req.decodeArgs(AutoHideArgs.self)
+        let session = try resolveSession(args.overlayId, in: delegate.coordinator)
+        session.autoHide = args.enabled
         return ControlResponse.success(id: req.id, result: EmptyResult())
     }
 

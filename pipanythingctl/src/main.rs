@@ -12,7 +12,19 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Clone, Debug, ValueEnum)]
+enum OnOff {
+    On,
+    Off,
+}
+
+impl OnOff {
+    fn enabled(&self) -> bool {
+        matches!(self, OnOff::On)
+    }
+}
 
 use crate::client::Client;
 
@@ -46,6 +58,29 @@ enum Command {
 
     /// List active overlays.
     Overlays,
+
+    /// Set overlay opacity (alpha 0..1).
+    Opacity {
+        overlay_id: String,
+        /// 0 (fully transparent) to 1 (fully opaque).
+        alpha: f64,
+    },
+
+    /// Toggle click-through on an overlay. When on, the overlay dims and
+    /// ignores mouse events so the user can work in the app behind it.
+    ClickThrough {
+        overlay_id: String,
+        #[arg(value_enum)]
+        state: OnOff,
+    },
+
+    /// Toggle auto-hide on an overlay. When on, the overlay hides whenever
+    /// the captured app is frontmost.
+    AutoHide {
+        overlay_id: String,
+        #[arg(value_enum)]
+        state: OnOff,
+    },
 
     /// Move and/or resize an overlay. Missing fields preserve current value.
     /// Frames are in screen-coordinate points (bottom-left origin).
@@ -161,6 +196,27 @@ fn run() -> Result<()> {
         }
         Command::Overlays => {
             let resp = client.call("list_overlays", &serde_json::json!({}))?;
+            print_result(resp)?;
+        }
+        Command::Opacity { overlay_id, alpha } => {
+            let args = protocol::OpacityArgs { overlay_id, alpha };
+            let resp = client.call("opacity", &args)?;
+            print_result(resp)?;
+        }
+        Command::ClickThrough { overlay_id, state } => {
+            let args = protocol::ClickThroughArgs {
+                overlay_id,
+                enabled: state.enabled(),
+            };
+            let resp = client.call("click_through", &args)?;
+            print_result(resp)?;
+        }
+        Command::AutoHide { overlay_id, state } => {
+            let args = protocol::AutoHideArgs {
+                overlay_id,
+                enabled: state.enabled(),
+            };
+            let resp = client.call("auto_hide", &args)?;
             print_result(resp)?;
         }
         Command::Geom {
