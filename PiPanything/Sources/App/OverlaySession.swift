@@ -273,6 +273,23 @@ final class OverlaySession {
         window.onContextMenu = { [weak self] event in
             self?.contextMenuBuilder?(event)
         }
+        window.onModifierActivate = { [weak self] _ in
+            self?.activateActiveSource()
+        }
+    }
+
+    /// ⌘-click on the overlay raises the captured source — un-minimises it,
+    /// makes it the main window of its app, and activates the app. Idle tab
+    /// (no captured PID) is a no-op. Cross-Space switching is a side effect
+    /// of `NSRunningApplication.activate` when the raised window lives on a
+    /// different Space.
+    private func activateActiveSource() {
+        guard let tab = activeTab,
+              let pid = tab.captureManager.capturedSourcePID else { return }
+        SourceActivator.bringSourceToFront(
+            pid: pid,
+            windowID: tab.captureManager.capturedWindowID
+        )
     }
 
     func setIdleStatus(_ message: String) {

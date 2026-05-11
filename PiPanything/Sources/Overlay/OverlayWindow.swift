@@ -18,8 +18,20 @@ import Cocoa
 
 final class OverlayWindow: NSWindow {
     var onContextMenu: ((NSEvent) -> Void)?
+    var onModifierActivate: ((NSEvent) -> Void)?
 
     override func sendEvent(_ event: NSEvent) {
+        // Intercept at sendEvent (rather than via a view's mouseDown) so the
+        // window's drag-to-move gesture doesn't consume the click before we
+        // see it — same trick as the rightMouseDown branch below.
+        // Exact-`.command` (not `.contains(.command)`) lets ⌘⇧/⌘⌥-click fall
+        // through to normal handling.
+        if event.type == .leftMouseDown,
+           event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           let onModifierActivate {
+            onModifierActivate(event)
+            return
+        }
         if event.type == .rightMouseDown {
             onContextMenu?(event)
             return
