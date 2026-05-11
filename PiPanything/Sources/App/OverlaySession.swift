@@ -327,6 +327,17 @@ final class OverlaySession {
         return target.id
     }
 
+    /// Replace the active tab's source in place. Reuses `startTab` so the
+    /// swap shows the same "Starting capture of X…" idle frame and the same
+    /// safety-net teardown as a fresh start. Crop is reset because it is
+    /// source-window-relative. No-op when there is no active tab.
+    @discardableResult
+    func setActiveSource(window source: SCWindow, cropImmediately: Bool = false) -> OverlayTabID? {
+        guard let tab = activeTab else { return nil }
+        startTab(tab, source: source, cropImmediately: cropImmediately)
+        return tab.id
+    }
+
     /// Switch the visible tab. Updates contentView, visibility wiring, and
     /// the resize-handle aspect lock (locked for single tab; free for N).
     func switchTo(_ tabID: OverlayTabID) {

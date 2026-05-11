@@ -190,6 +190,7 @@ enum SourcePickerMenu {
         target: AnyObject,
         openPickerAction: Selector,
         addTabAction: Selector,
+        setWindowAction: Selector,
         overlayAction: Selector,
         stopAllAction: Selector,
         quitAction: Selector
@@ -224,8 +225,16 @@ enum SourcePickerMenu {
             menu.addItem(idleHint)
         }
 
-        // Add-tab to this session — opens the picker bound to focused.id.
+        // Set window… (capturing only) + Add tab here… — both open the picker
+        // bound to focused.id; the AppDelegate-side handlers route the result
+        // to either an in-place active-tab swap or a new tab append.
         menu.addItem(.separator())
+        if focused.isCapturing {
+            let setWindow = NSMenuItem(title: "Set window…", action: setWindowAction, keyEquivalent: "")
+            setWindow.target = target
+            setWindow.representedObject = focused.id
+            menu.addItem(setWindow)
+        }
         let addTab = NSMenuItem(title: "Add tab here…", action: addTabAction, keyEquivalent: "")
         addTab.target = target
         addTab.representedObject = focused.id
