@@ -221,7 +221,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 addTabAction: #selector(openPickerForAddTab(_:)),
                 setWindowAction: #selector(openPickerForSetWindow(_:)),
                 overlayAction: #selector(handleOverlayMenu(_:)),
-                stopAllAction: #selector(stopAll),
                 quitAction: #selector(quit)
             )
         } else {
@@ -373,6 +372,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             tearOutTab(tabID, from: session)
         case .moveTabTo(let tabID, let targetSessionID):
             moveTab(tabID, from: session, to: targetSessionID)
+        case .bringSourceToFront:
+            session.activateActiveSource()
         case .minimize:
             session.minimize()
         case .restoreFromMinimized:
