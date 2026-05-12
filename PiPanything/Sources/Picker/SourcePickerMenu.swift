@@ -189,10 +189,28 @@ enum SourcePickerMenu {
         return items
     }
 
-    /// Right-click-on-overlay menu: the focused session's controls inline at
-    /// the top, sibling sessions in an "Other overlays" submenu, then the
-    /// global picker / Stop all / Quit. Lets a user reach any other session
-    /// from any overlay without forcing them to dig through "Active overlays".
+    /// Right-click-on-overlay menu, overlay-scoped.
+    ///
+    /// Layout for a capturing session:
+    ///   Header (overlay name)
+    ///   ─────
+    ///   Go to window                                    (Source)
+    ///   ─────
+    ///   Replace window…  /  Add tab…  /  Other tabs ▸   (Tabs)
+    ///   ─────
+    ///   Crop… or Clear crop  /  Opacity ▸
+    ///   Click-through  /  Auto-hide                     (Appearance)
+    ///   ─────
+    ///   Minimize  /  Stop                               (Lifecycle)
+    ///   ─────
+    ///   Pick window…
+    ///   Quit PiPanything                                (global escape hatches)
+    ///
+    /// Idle session collapses everything between the header and the global
+    /// escape hatches to a single disabled "Idle — pick a window below" hint.
+    ///
+    /// Cross-overlay navigation (sibling overlays, minimized list, Stop all)
+    /// lives only in the status menu now — `populate` builds that surface.
     static func populateSessionScoped(
         _ menu: NSMenu,
         focusedID: OverlayID,
@@ -202,60 +220,84 @@ enum SourcePickerMenu {
         addTabAction: Selector,
         setWindowAction: Selector,
         overlayAction: Selector,
-        stopAllAction: Selector,
         quitAction: Selector
     ) {
         menu.removeAllItems()
 
+        // Session-vanished fallback: just the global escape hatches.
         guard let focused = activeOverlays.first(where: { $0.id == focusedID }) else {
-            // Session was removed mid-right-click — fall back to the global menu.
-            populate(menu,
-                     activeOverlays: activeOverlays,
-                     target: target,
-                     openPickerAction: openPickerAction,
-                     overlayAction: overlayAction,
-                     stopAllAction: stopAllAction,
-                     quitAction: quitAction)
+            menu.addItem(makePickItem(target: target, action: openPickerAction))
+            menu.addItem(makeQuitItem(target: target, action: quitAction))
             return
         }
 
-        // Header showing which overlay (and active tab) the user clicked on.
         let header = NSMenuItem(title: focused.displayLabel, action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
 
-        // Inline session controls (only meaningful when the session is capturing).
         if focused.isCapturing {
-            for item in sessionActionItems(model: focused, target: target, action: overlayAction) {
-                menu.addItem(item)
-            }
+            menu.addItem(.separator())
+            appendSourceGroup(to: menu, model: focused, target: target, action: overlayAction)
+
+            menu.addItem(.separator())
+            appendTabsGroup(to: menu, focused: focused, activeOverlays: activeOverlays,
+                            target: target,
+                            setWindowAction: setWindowAction,
+                            addTabAction: addTabAction,
+                            overlayAction: overlayAction)
+
+            menu.addItem(.separator())
+            appendAppearanceGroup(to: menu, model: focused, target: target, action: overlayAction)
+
+            menu.addItem(.separator())
+            appendLifecycleGroup(to: menu, model: focused, target: target, action: overlayAction)
         } else {
             let idleHint = NSMenuItem(title: "Idle — pick a window below", action: nil, keyEquivalent: "")
             idleHint.isEnabled = false
             menu.addItem(idleHint)
         }
 
-        // Set window… (capturing only) + Add tab here… — both open the picker
-        // bound to focused.id; the AppDelegate-side handlers route the result
-        // to either an in-place active-tab swap or a new tab append.
         menu.addItem(.separator())
-        if focused.isCapturing {
-            let setWindow = NSMenuItem(title: "Replace window…", action: setWindowAction, keyEquivalent: "")
-            setWindow.target = target
-            setWindow.representedObject = focused.id
-            menu.addItem(setWindow)
-        }
+        menu.addItem(makePickItem(target: target, action: openPickerAction))
+        menu.addItem(makeQuitItem(target: target, action: quitAction))
+    }
+
+    // MARK: - Right-click group builders
+
+    private static func appendSourceGroup(to menu: NSMenu,
+                                          model: OverlaySessionMenuModel,
+                                          target: AnyObject,
+                                          action: Selector) {
+        let goToWindow = NSMenuItem(title: "Go to window", action: action, keyEquivalent: "")
+        goToWindow.target = target
+        goToWindow.representedObject = OverlayMenuTag(model.id, .bringSourceToFront)
+        menu.addItem(goToWindow)
+    }
+
+    /// Tabs group: Replace window… (capturing only), Add tab…, and the
+    /// per-tab submenu when the session has ≥2 tabs. `moveTargets` for the
+    /// per-tab "Move to" sub-sub-menu still uses all capturing siblings so
+    /// users can shuttle tabs between overlays even though sibling overlay
+    /// *controls* no longer appear in the right-click.
+    private static func appendTabsGroup(to menu: NSMenu,
+                                        focused: OverlaySessionMenuModel,
+                                        activeOverlays: [OverlaySessionMenuModel],
+                                        target: AnyObject,
+                                        setWindowAction: Selector,
+                                        addTabAction: Selector,
+                                        overlayAction: Selector) {
+        let setWindow = NSMenuItem(title: "Replace window…", action: setWindowAction, keyEquivalent: "")
+        setWindow.target = target
+        setWindow.representedObject = focused.id
+        menu.addItem(setWindow)
+
         let addTab = NSMenuItem(title: "Add tab…", action: addTabAction, keyEquivalent: "")
         addTab.target = target
         addTab.representedObject = focused.id
         menu.addItem(addTab)
 
-        // Other overlays (siblings only) — needed early so per-tab "Move to"
-        // submenus can list possible destinations.
-        let siblings = activeOverlays.filter { $0.id != focusedID && $0.isCapturing }
-
-        // Per-tab submenu (only visible when there are multiple tabs).
         if focused.tabs.count >= 2 {
+            let siblings = activeOverlays.filter { $0.id != focused.id && $0.isCapturing }
             let other = NSMenuItem(title: "Other tabs", action: nil, keyEquivalent: "")
             let sub = NSMenu()
             for tab in focused.tabs where !tab.isActive {
@@ -266,45 +308,68 @@ enum SourcePickerMenu {
             other.submenu = sub
             menu.addItem(other)
         }
-        if !siblings.isEmpty {
-            menu.addItem(.separator())
-            let other = NSMenuItem(title: "Other overlays", action: nil, keyEquivalent: "")
-            let sub = NSMenu()
-            for sibling in siblings {
-                sub.addItem(makeOverlayItem(model: sibling, target: target, action: overlayAction))
-            }
-            other.submenu = sub
-            menu.addItem(other)
+    }
+
+    private static func appendAppearanceGroup(to menu: NSMenu,
+                                              model: OverlaySessionMenuModel,
+                                              target: AnyObject,
+                                              action: Selector) {
+        if model.hasCrop {
+            let clear = NSMenuItem(title: "Clear crop", action: action, keyEquivalent: "")
+            clear.target = target
+            clear.representedObject = OverlayMenuTag(model.id, .clearCrop)
+            menu.addItem(clear)
+        } else {
+            let setCrop = NSMenuItem(title: "Crop…", action: action, keyEquivalent: "")
+            setCrop.target = target
+            setCrop.representedObject = OverlayMenuTag(model.id, .setCrop)
+            menu.addItem(setCrop)
         }
 
-        // Minimized overlays — same flat list as the status menu so the user
-        // can restore from any right-click, not just the menu-bar icon.
-        let minimizedOverlays = activeOverlays.filter { $0.isMinimized }
-        if !minimizedOverlays.isEmpty {
-            menu.addItem(.separator())
-            let header = NSMenuItem(title: "Minimized", action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            menu.addItem(header)
-            for model in minimizedOverlays {
-                menu.addItem(makeMinimizedItem(model: model, target: target, action: overlayAction))
-            }
+        let opacitySubmenu = NSMenu()
+        for percent in [100, 90, 75, 50, 25] {
+            let item = NSMenuItem(title: "\(percent)%", action: action, keyEquivalent: "")
+            item.target = target
+            item.representedObject = OverlayMenuTag(model.id, .setOpacity(percent))
+            item.state = (percent == model.opacityPercent) ? .on : .off
+            opacitySubmenu.addItem(item)
         }
+        let opacity = NSMenuItem(title: "Opacity", action: nil, keyEquivalent: "")
+        opacity.submenu = opacitySubmenu
+        menu.addItem(opacity)
 
-        menu.addItem(.separator())
+        let clickThrough = NSMenuItem(title: "Click-through", action: action, keyEquivalent: "")
+        clickThrough.target = target
+        clickThrough.representedObject = OverlayMenuTag(model.id, .toggleClickThrough)
+        clickThrough.state = model.clickThroughLatched ? .on : .off
+        menu.addItem(clickThrough)
 
-        // Global picker, reachable from any overlay's right-click.
-        menu.addItem(makePickItem(target: target, action: openPickerAction))
+        let autoHide = NSMenuItem(title: "Auto-hide", action: action, keyEquivalent: "")
+        autoHide.target = target
+        autoHide.representedObject = OverlayMenuTag(model.id, .toggleAutoHide)
+        autoHide.state = model.autoHide ? .on : .off
+        menu.addItem(autoHide)
+    }
 
-        if activeOverlays.contains(where: { $0.isCapturing }) {
-            let stopAll = NSMenuItem(title: "Stop all", action: stopAllAction, keyEquivalent: "")
-            stopAll.target = target
-            menu.addItem(stopAll)
-        }
+    private static func appendLifecycleGroup(to menu: NSMenu,
+                                             model: OverlaySessionMenuModel,
+                                             target: AnyObject,
+                                             action: Selector) {
+        let minimize = NSMenuItem(title: "Minimize", action: action, keyEquivalent: "")
+        minimize.target = target
+        minimize.representedObject = OverlayMenuTag(model.id, .minimize)
+        menu.addItem(minimize)
 
-        menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit PiPanything", action: quitAction, keyEquivalent: "q")
+        let stop = NSMenuItem(title: "Stop", action: action, keyEquivalent: "")
+        stop.target = target
+        stop.representedObject = OverlayMenuTag(model.id, .stop)
+        menu.addItem(stop)
+    }
+
+    private static func makeQuitItem(target: AnyObject, action: Selector) -> NSMenuItem {
+        let quit = NSMenuItem(title: "Quit PiPanything", action: action, keyEquivalent: "q")
         quit.target = target
-        menu.addItem(quit)
+        return quit
     }
 
     // MARK: - Per-tab submenu (multi-tab overlays only)

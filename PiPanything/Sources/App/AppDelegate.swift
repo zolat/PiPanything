@@ -221,7 +221,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 addTabAction: #selector(openPickerForAddTab(_:)),
                 setWindowAction: #selector(openPickerForSetWindow(_:)),
                 overlayAction: #selector(handleOverlayMenu(_:)),
-                stopAllAction: #selector(stopAll),
                 quitAction: #selector(quit)
             )
         } else {
