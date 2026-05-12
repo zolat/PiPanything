@@ -124,9 +124,12 @@ enum SourcePickerMenu {
         return item
     }
 
-    /// The Stop / Crop / Auto-hide / Opacity items for a single session,
-    /// returned in display order. Used both inline (right-click on overlay)
-    /// and in the per-overlay submenu (status menu's "Active overlays").
+    /// Per-overlay action items in display order. Used by the status menu's
+    /// per-overlay submenu (flat list, no separators). The right-click menu
+    /// arranges the same items into visual groups separately.
+    ///
+    /// Order: Go to window / Crop / Opacity / Click-through / Auto-hide /
+    /// Minimize / Stop.
     private static func sessionActionItems(model: OverlaySessionMenuModel, target: AnyObject, action: Selector) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
 
@@ -137,39 +140,17 @@ enum SourcePickerMenu {
         goToWindow.representedObject = OverlayMenuTag(model.id, .bringSourceToFront)
         items.append(goToWindow)
 
-        let stop = NSMenuItem(title: "Stop", action: action, keyEquivalent: "")
-        stop.target = target
-        stop.representedObject = OverlayMenuTag(model.id, .stop)
-        items.append(stop)
-
         if model.hasCrop {
-            let clear = NSMenuItem(title: "Clear crop region", action: action, keyEquivalent: "")
+            let clear = NSMenuItem(title: "Clear crop", action: action, keyEquivalent: "")
             clear.target = target
             clear.representedObject = OverlayMenuTag(model.id, .clearCrop)
             items.append(clear)
         } else {
-            let setCrop = NSMenuItem(title: "Set crop region…", action: action, keyEquivalent: "")
+            let setCrop = NSMenuItem(title: "Crop…", action: action, keyEquivalent: "")
             setCrop.target = target
             setCrop.representedObject = OverlayMenuTag(model.id, .setCrop)
             items.append(setCrop)
         }
-
-        let autoHide = NSMenuItem(title: "Auto-hide when source is frontmost", action: action, keyEquivalent: "")
-        autoHide.target = target
-        autoHide.representedObject = OverlayMenuTag(model.id, .toggleAutoHide)
-        autoHide.state = model.autoHide ? .on : .off
-        items.append(autoHide)
-
-        let clickThrough = NSMenuItem(title: "Click-through", action: action, keyEquivalent: "")
-        clickThrough.target = target
-        clickThrough.representedObject = OverlayMenuTag(model.id, .toggleClickThrough)
-        clickThrough.state = model.clickThroughLatched ? .on : .off
-        items.append(clickThrough)
-
-        let minimize = NSMenuItem(title: "Minimize", action: action, keyEquivalent: "")
-        minimize.target = target
-        minimize.representedObject = OverlayMenuTag(model.id, .minimize)
-        items.append(minimize)
 
         let opacityMenu = NSMenu()
         for percent in [100, 90, 75, 50, 25] {
@@ -179,9 +160,31 @@ enum SourcePickerMenu {
             opacityItem.state = (percent == model.opacityPercent) ? .on : .off
             opacityMenu.addItem(opacityItem)
         }
-        let opacityItem = NSMenuItem(title: "Transparency", action: nil, keyEquivalent: "")
+        let opacityItem = NSMenuItem(title: "Opacity", action: nil, keyEquivalent: "")
         opacityItem.submenu = opacityMenu
         items.append(opacityItem)
+
+        let clickThrough = NSMenuItem(title: "Click-through", action: action, keyEquivalent: "")
+        clickThrough.target = target
+        clickThrough.representedObject = OverlayMenuTag(model.id, .toggleClickThrough)
+        clickThrough.state = model.clickThroughLatched ? .on : .off
+        items.append(clickThrough)
+
+        let autoHide = NSMenuItem(title: "Auto-hide", action: action, keyEquivalent: "")
+        autoHide.target = target
+        autoHide.representedObject = OverlayMenuTag(model.id, .toggleAutoHide)
+        autoHide.state = model.autoHide ? .on : .off
+        items.append(autoHide)
+
+        let minimize = NSMenuItem(title: "Minimize", action: action, keyEquivalent: "")
+        minimize.target = target
+        minimize.representedObject = OverlayMenuTag(model.id, .minimize)
+        items.append(minimize)
+
+        let stop = NSMenuItem(title: "Stop", action: action, keyEquivalent: "")
+        stop.target = target
+        stop.representedObject = OverlayMenuTag(model.id, .stop)
+        items.append(stop)
 
         return items
     }
@@ -237,12 +240,12 @@ enum SourcePickerMenu {
         // to either an in-place active-tab swap or a new tab append.
         menu.addItem(.separator())
         if focused.isCapturing {
-            let setWindow = NSMenuItem(title: "Set window…", action: setWindowAction, keyEquivalent: "")
+            let setWindow = NSMenuItem(title: "Replace window…", action: setWindowAction, keyEquivalent: "")
             setWindow.target = target
             setWindow.representedObject = focused.id
             menu.addItem(setWindow)
         }
-        let addTab = NSMenuItem(title: "Add tab here…", action: addTabAction, keyEquivalent: "")
+        let addTab = NSMenuItem(title: "Add tab…", action: addTabAction, keyEquivalent: "")
         addTab.target = target
         addTab.representedObject = focused.id
         menu.addItem(addTab)
