@@ -373,6 +373,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             tearOutTab(tabID, from: session)
         case .moveTabTo(let tabID, let targetSessionID):
             moveTab(tabID, from: session, to: targetSessionID)
+        case .bringSourceToFront:
+            session.activateActiveSource()
         case .minimize:
             session.minimize()
         case .restoreFromMinimized:

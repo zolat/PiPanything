@@ -130,6 +130,13 @@ enum SourcePickerMenu {
     private static func sessionActionItems(model: OverlaySessionMenuModel, target: AnyObject, action: Selector) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
 
+        // Mirrors ⌘-click on the overlay: raise the captured source, cross-Space
+        // switching follows from NSRunningApplication.activate.
+        let goToWindow = NSMenuItem(title: "Go to window", action: action, keyEquivalent: "")
+        goToWindow.target = target
+        goToWindow.representedObject = OverlayMenuTag(model.id, .bringSourceToFront)
+        items.append(goToWindow)
+
         let stop = NSMenuItem(title: "Stop", action: action, keyEquivalent: "")
         stop.target = target
         stop.representedObject = OverlayMenuTag(model.id, .stop)

@@ -49,6 +49,8 @@ final class OverlayMenuTag: NSObject {
         // Minimize-to-status-menu (Phase 4).
         case minimize
         case restoreFromMinimized
+        // Raise the active tab's captured source — same as ⌘-click on the overlay.
+        case bringSourceToFront
     }
     let id: OverlayID
     let action: Action
@@ -282,8 +284,8 @@ final class OverlaySession {
     /// makes it the main window of its app, and activates the app. Idle tab
     /// (no captured PID) is a no-op. Cross-Space switching is a side effect
     /// of `NSRunningApplication.activate` when the raised window lives on a
-    /// different Space.
-    private func activateActiveSource() {
+    /// different Space. Also surfaced as the "Go to window" right-click item.
+    func activateActiveSource() {
         guard let tab = activeTab,
               let pid = tab.captureManager.capturedSourcePID else { return }
         SourceActivator.bringSourceToFront(
