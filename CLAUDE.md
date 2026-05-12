@@ -188,6 +188,9 @@ right surface up front:
 - **Trivial edits** (one-line doc tweaks, CLAUDE.md updates, single-file
   copy fixes) and **read-only work** (retros, planning, research) stay
   on the main checkout.
+- **Split shipping commits by intent.** Even for tiny ships, separate
+  the feature/fix from unrelated doc/backlog edits — reviewers (human
+  or future agent) can read either independently.
 
 Direct push to `origin/main` after merge — no PRs, no review branches.
 The worktree is the isolation boundary; PR review isn't.
