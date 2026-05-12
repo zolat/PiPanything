@@ -17,3 +17,6 @@ Package.resolved
 
 # Local logs / scratch
 *.log
+
+# Rust (pipanythingctl)
+pipanythingctl/target/

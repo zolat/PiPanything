@@ -46,3 +46,8 @@ targets:
         INFOPLIST_FILE: PiPanything/Info.plist
         INFOPLIST_KEY_LSUIElement: YES
         INFOPLIST_KEY_NSPrincipalClass: NSApplication
+    postCompileScripts:
+      - name: Build pipanythingctl (Rust)
+        script: |
+          "${SRCROOT}/tools/build-cli.sh"
+        showEnvVarsInLog: false

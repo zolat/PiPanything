@@ -1,0 +1,27 @@
+[package]
+name = "pipanythingctl"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Command-line and MCP control surface for PiPanything."
+license = "GPL-3.0-only"
+authors = ["Thomas Zola"]
+repository = "https://github.com/zolat/pipanythingctl"
+readme = "README.md"
+
+[[bin]]
+name = "pipanythingctl"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+opt-level = "z"
+panic = "abort"

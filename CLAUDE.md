@@ -8,6 +8,8 @@ Companion docs:
 - `BACKLOG.md` — live cross-session task board. Read this to find work.
 - `~/.claude/plans/i-think-we-proven-purrfect-scone.md` — long-form plan
   with the *why*. Read this before re-planning a Phase D track.
+- `docs/agent-control.md` — protocol + CLI reference for the agent-
+  control surface (Unix socket + `pipanythingctl` Rust binary).
 
 ## What this app is
 
@@ -23,11 +25,13 @@ Headline use case: keep a YouTube tab visible across Spaces.
 ## Build / run
 
 ```sh
+rustup target add aarch64-apple-darwin x86_64-apple-darwin   # Rust CLI; one-time
 xcodegen generate                                       # rebuild .xcodeproj from project.yml
 xcodebuild -scheme PiPanything -configuration Debug build
 APP=$(xcodebuild -showBuildSettings -scheme PiPanything 2>/dev/null \
   | awk -F' = ' '/^[[:space:]]+BUILT_PRODUCTS_DIR = / {print $2}')
 "$APP/PiPanything.app/Contents/MacOS/PiPanything"       # run
+"$APP/PiPanything.app/Contents/Resources/pipanythingctl" ping  # control CLI
 ```
 
 `.xcodeproj` is **gitignored** — regenerate from `project.yml` after a clone.
@@ -36,6 +40,9 @@ Environment knob for headless verification:
 - `PIP_AUTO_CAPTURE=1` — auto-pick the largest non-self window at launch.
 - `PIP_OPEN_PICKER=1` — open the window picker on launch. Combine with
   `PIP_AUTO_CAPTURE=1` for layered-window verification.
+- `PIP_CONTROL_SERVER=1` — start the Unix-socket control server so
+  `pipanythingctl` can drive the app. Opt-in through the first ship;
+  see `docs/agent-control.md`.
 
 Permissions on first launch (TCC will prompt; binary path inside the
 `.app` bundle is stable, so the grant survives rebuilds):
@@ -48,6 +55,19 @@ Permissions on first launch (TCC will prompt; binary path inside the
 ```
 PiPanything/
 ├── project.yml                 xcodegen spec; single app target
+├── tools/
+│   └── build-cli.sh            cargo build pipanythingctl + lipo +
+│                               copy into the .app bundle. Invoked
+│                               from project.yml postCompileScripts.
+├── pipanythingctl/             Rust CLI + (Phase 2) MCP shim that
+│   ├── Cargo.toml              speaks the control socket. Ships
+│   ├── src/                    inside Contents/Resources/ of the .app
+│   │   ├── main.rs             and is subtree-publishable to a
+│   │   ├── client.rs           standalone mirror repo. Wire-protocol
+│   │   ├── protocol.rs         types mirror Swift ControlProtocol —
+│   │   └── autolaunch.rs       change both files in the same commit.
+├── docs/
+│   └── agent-control.md        Control protocol + CLI reference.
 ├── PiPanything/
 │   ├── Info.plist              LSUIElement, NSScreenCaptureDescription
 │   └── Sources/
@@ -67,10 +87,15 @@ PiPanything/
 │       │   ├── SourceList.swift        SCShareableContent + filter pipeline
 │       │   ├── SourcePickerMenu.swift  NSMenu population (right-click context)
 │       │   └── PickerRowView.swift     Custom NSMenuItem.view w/ thumbnail
-│       └── Features/
-│           ├── SourceVisibility.swift  Auto show/hide on NSWorkspace activation
-│           ├── ClickThrough.swift      Latched ignoreMouseEvents + configurable dim
-│           └── CropRegion.swift        Marquee selection view
+│       ├── Features/
+│       │   ├── SourceVisibility.swift  Auto show/hide on NSWorkspace activation
+│       │   ├── ClickThrough.swift      Latched ignoreMouseEvents + configurable dim
+│       │   └── CropRegion.swift        Marquee selection view
+│       └── Server/
+│           ├── ControlServer.swift     AF_UNIX + NDJSON listener
+│           ├── ControlProtocol.swift   Codable wire types (paired with
+│           │                           pipanythingctl/src/protocol.rs)
+│           └── ControlHandlers.swift   Per-command dispatch on MainActor
 ```
 
 Single ownership chain: `PiPanythingApp` → `AppDelegate` (the only

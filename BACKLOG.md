@@ -30,6 +30,7 @@ and which sibling session is on what.
 | Track | Status | Parallel-safe? |
 |---|---|---|
 | Global hotkeys | 🔵 | yes |
+| **Agent-control surface (socket + CLI + MCP shim)** | 🔵 | yes |
 | **Menu-driver helper for end-to-end verification** (high priority) | 🟢 | yes |
 | **Headless verification toolkit** (medium priority) | 🟢 | yes |
 | Per-PIP media-key forwarding (research) | 🟢 | yes |
@@ -50,6 +51,18 @@ and which sibling session is on what.
 **Touches:** new `Features/Hotkeys.swift`, plus small additions to `App/AppDelegate.swift` and `Features/SourceVisibility.swift`. Carbon `RegisterEventHotKey` directly (no MASShortcut dependency).
 **Scope:** three defaults — `⌃⌥P` toggle capture (stop / restart last source within session), `⌃⌥H` toggle overlay visibility, `⌃⌥N` cycle sources from the current picker list. No customization UI yet; constants in code. `⌃⌥P`'s "last" is in-memory only — persistence was deliberately dropped (window content is too dynamic to make on-disk identity reliable).
 **Acceptance:** shortcuts fire even when other apps are frontmost; do not steal keys when typing in a text field elsewhere; on `applicationWillTerminate`, hotkeys are unregistered cleanly.
+
+### Agent-control surface (socket + CLI + MCP shim)
+
+**Status:** 🔵 in progress · **Parallel-safe:** yes (net-new files; one small wiring point in `AppDelegate`) · **Depends on:** none for Phase 1–2. Phase 3 (`show_url`) overlaps the Safari extension track's WKWebView player and should land after it (or share that work). Plan file at `~/.claude/plans/jazzy-strolling-meerkat.md`.
+**Session note (2026-05-11):** Phase 1 (socket + Rust CLI, no MCP shim) landing in worktree `agent-control-phase-1`. Env-gated behind `PIP_CONTROL_SERVER=1` for first ship.
+**Touches:** new `Server/{ControlServer,ControlProtocol,ControlHandlers}.swift` in the app target; new **Rust** `pipanythingctl/` subdir (Cargo workspace, `cargo build` driven by a Run Script build phase in `project.yml`); `App/AppDelegate.swift` wiring (~6 lines, env-gated); new `tools/build-cli.sh`, `tools/publish-cli-mirror.sh`; new `docs/agent-control.md`; small `CLAUDE.md` note.
+**Why:** PiPanything's headline value — surfacing something from another Space — is exactly the situation a fullscreen Claude Code terminal puts the user in. A programmable surface lets Claude show a build window, a PR tab, a chart, or a generated image without the user switching Spaces. Same-user local IPC, so the security model is "no auth needed beyond default socket perms" (Claude Code already has shell on the account).
+**Architecture:** Swift GUI app exposes a Unix domain socket (`~/Library/Application Support/PiPanything/control.sock`, mode 0600), NDJSON wire format. A separate **Rust** `pipanythingctl` binary speaks the socket and is also Claude's MCP server (`pipanythingctl mcp` subcommand → stdio MCP). Single ~2MB static binary, ships inside `PiPanything.app/Contents/Resources/pipanythingctl` (lipo'd universal). CLI auto-launches the GUI with `open -ga PiPanything` if the socket is absent.
+**Repo layout:** monorepo for dev (atomic wire-protocol PRs touch `ControlProtocol.swift` and `pipanythingctl/src/protocol.rs` together). Standalone mirror repo via `git subtree split --prefix=pipanythingctl/` for homebrew tap / `cargo install --git`. One-way sync, monorepo is source of truth.
+**Phasing:** (1) Socket + minimal CLI (`list`, `show`, `hide`, `list_overlays`, `geom`, `crop`, `opacity`, `click_through`, `auto_hide`, `ping`) — validates the wire and unblocks scripted feature testing too. Opt-in via `PIP_CONTROL_SERVER=1` env gate. (2) `pipanythingctl mcp` shim → stdio MCP server with one tool per socket command. (3) `show_url` — requires the WKWebView player from the Safari track. (4) Event stream (socket push for `overlay_closed` / `source_quit`) surfaced as MCP notifications.
+**Acceptance (Phase 1):** with the app running, `pipanythingctl list` prints the same capturable windows the right-click picker shows; `pipanythingctl show "<title-substring>"` opens an overlay; `pipanythingctl overlays` lists it with a stable `overlay_id`; `pipanythingctl hide <id>` closes it. **Phase 2:** registering `pipanythingctl mcp` in a local Claude Code instance and asking it to "show me Finder in PiP" opens the overlay end-to-end.
+**Origin:** 2026-05-11 chat with user — confirmed low-security same-user IPC, the socket+CLI+MCP-shim split, **Rust** for the CLI, and subtree-mirror repo layout.
 
 ### Menu-driver helper for end-to-end verification
 
